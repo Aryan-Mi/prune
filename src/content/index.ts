@@ -287,7 +287,7 @@ class Controller implements UiActions {
         const res = responses.fileTree;
         const etag = res.headers.get('ETag');
         let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
-        if (result) res.body?.cancel().catch(() => {});
+        if (result) discard(res);
         // Not stored (any more): send the list over.
         else result = await prune(pr, responses, await res.text(), etag);
         if (!result) throw new Error('Could not prune this pull request');
@@ -585,6 +585,15 @@ function prune(
     repo,
     repoFetched,
   });
+}
+
+/** Lets go of a response that won't be read. */
+function discard(res: Response): void {
+  try {
+    res.body?.cancel().catch(() => {});
+  } catch {
+    // Only frees the connection's buffers early; the response is dropped anyway.
+  }
 }
 
 /** Messages the background script; it replies `{ error }` when something failed. */

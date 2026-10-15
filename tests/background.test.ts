@@ -1,10 +1,18 @@
 import { expect, test } from 'bun:test';
 import { PrFileList } from '../src/shared/filetree.ts';
 
-// A stand-in for storage.session that, like the real one, stores copies.
+// A stand-in for storage.session that, like the real one, stores copies,
+// and for tabs.sendMessage to tabs 1 and 2 (others are gone).
 const area = new Map<string, unknown>();
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+const sent: [number, unknown][] = [];
 (globalThis as { browser?: unknown }).browser = {
+  tabs: {
+    async sendMessage(id: number, msg: unknown) {
+      if (id > 2) throw new Error('Could not establish connection. Receiving end does not exist.');
+      sent.push([id, msg]);
+    },
+  },
   storage: {
     session: {
       async get(key: string) {
@@ -23,6 +31,7 @@ const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
   },
 };
 const { cachePartition, loadFileList, saveFileList, storedEtag } = await import('../src/background/cache.ts');
+const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
 
 const list = (n: number) =>
   PrFileList.of(
@@ -63,4 +72,20 @@ test('cache keys are per container, and private windows get none', () => {
   expect(cachePartition({ tab: { ...tab, cookieStoreId: 'firefox-container-1' } })).toBe('firefox-container-1|');
   expect(cachePartition({ tab: { ...tab, incognito: true } })).toBeNull();
   expect(cachePartition({})).toBeNull();
+});
+
+test('tabs keep their switched-off PRs and get settings changes', async () => {
+  expect(await openTab(1)).toEqual([]);
+  await setInactive(1, ['a/b#1']);
+  expect(await openTab(1)).toEqual(['a/b#1']);
+  expect(await openTab(2)).toEqual([]);
+  expect(await openTab(3)).toEqual([]);
+  expect(await openTab(undefined)).toEqual([]);
+  await notifyTabs({ type: 'refresh-remote' });
+  expect(sent.map(([id]) => id).sort()).toEqual([1, 2]);
+  // Tab 3 didn't answer, so it's forgotten.
+  sent.length = 0;
+  await notifyTabs({ type: 'refresh-remote' });
+  expect(sent.map(([id]) => id).sort()).toEqual([1, 2]);
+  expect(Object.keys(area.get('tabs') as object).sort()).toEqual(['1', '2']);
 });
