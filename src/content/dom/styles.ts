@@ -95,11 +95,11 @@ function fullyPrunedDirs(result: PruneResult): string[] {
   const prunedDirs = new Set<string>();
   for (const file of result.files) {
     const target = result.prunedDigests.has(file.digest) ? prunedDirs : keptDirs;
-    let i = file.path.lastIndexOf('/');
-    while (i > 0) {
+    for (let i = file.path.lastIndexOf('/'); i > 0; i = file.path.lastIndexOf('/', i - 1)) {
       const dir = file.path.slice(0, i);
+      // Its parents were added along with it.
+      if (target.has(dir)) break;
       target.add(dir);
-      i = dir.lastIndexOf('/');
     }
   }
   return [...prunedDirs].filter((d) => !keptDirs.has(d));
