@@ -49,7 +49,8 @@ export interface PrFile {
 /** sha256 hex, as GitHub reports it. */
 const DIGEST = /^[0-9a-f]{64}$/;
 const DIGEST_BYTES = 32;
-const HEX = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, '0'));
+/** Two-digit hex for every byte value. */
+let byteHex: string[] | undefined;
 
 /** Value of a lowercase hex digit's char code. */
 function hexValue(code: number): number {
@@ -94,8 +95,10 @@ export class PrFileList {
   }
 
   digest(i: number): string {
+    // Built on first use, so pages without a PR never allocate it.
+    const table = (byteHex ??= Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, '0')));
     let hex = '';
-    for (let b = i * DIGEST_BYTES; b < (i + 1) * DIGEST_BYTES; b++) hex += HEX[this.digests[b]!];
+    for (let b = i * DIGEST_BYTES; b < (i + 1) * DIGEST_BYTES; b++) hex += table[this.digests[b]!];
     return hex;
   }
 
