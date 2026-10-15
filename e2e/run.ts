@@ -138,7 +138,8 @@ try {
   const lockDiff = page.locator(`#diff-${lock.pathDigest}`);
   await lockDiff.waitFor({ state: 'attached', timeout: 30_000 });
   const section = page.locator('[data-prune-ui="section"]');
-  await section.waitFor({ timeout: 20_000 });
+  // Attached right away, but empty until it comes near the viewport.
+  await section.waitFor({ state: 'attached', timeout: 20_000 });
   check('pruned diff is hidden', !(await lockDiff.isVisible()));
   check(
     'pruned file hidden in file tree',
