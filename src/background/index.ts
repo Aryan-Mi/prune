@@ -9,6 +9,7 @@ import {
   loadRemoteCache,
   loadSettings,
   onConfigChanged,
+  pageSettings,
   REMOTE_KEY,
   REMOTE_TTL_MS,
   rulesKey,
@@ -97,7 +98,7 @@ async function lookup(msg: Extract<Message, { type: 'lookup' }>, sender: browser
     partition === null ? null : storedRepoConfig(partition + msg.repoKey),
   ]);
   return {
-    settings,
+    settings: pageSettings(settings),
     inactive,
     etag: fetches ? null : (entry?.etag ?? null),
     capped: !fetches && !!entry?.capped,
@@ -182,9 +183,9 @@ ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: u
 });
 
 // Content scripts don't read settings themselves (see tabs.ts).
-onConfigChanged((remoteChanged) => {
+onConfigChanged((rulesChanged) => {
   loadSettings()
-    .then((settings) => notifyTabs({ type: 'config-changed', settings, remoteChanged }))
+    .then((settings) => notifyTabs({ type: 'config-changed', settings: pageSettings(settings), rulesChanged }))
     .catch(() => {});
 });
 

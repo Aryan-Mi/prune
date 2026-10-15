@@ -1,5 +1,5 @@
 import type { PrTotals } from './filetree.ts';
-import type { Settings } from './settings.ts';
+import type { PageSettings } from './settings.ts';
 
 /** A repository's `.pruneignore`, as found on its default branch. */
 export interface RepoConfig {
@@ -13,7 +13,7 @@ export type Message =
   | { type: 'get-status' }
   | { type: 'set-active'; active: boolean }
   /** Background → content scripts that opened a PR: settings or the remote rules changed. */
-  | { type: 'config-changed'; settings: Settings; remoteChanged: boolean }
+  | { type: 'config-changed'; settings: PageSettings; rulesChanged: boolean }
   /** Content → background: the PRs switched off in this tab. */
   | { type: 'set-inactive'; keys: string[] }
   /**
@@ -43,7 +43,7 @@ export type Message =
 
 /** Reply to `lookup`. */
 export interface Lookup {
-  settings: Settings;
+  settings: PageSettings;
   /** PRs switched off in this tab. */
   inactive: string[];
   /** ETag of the file list the stored result is for, to revalidate with. */

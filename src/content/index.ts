@@ -3,7 +3,7 @@ import { applyTotals, fetchPrTotals, isCapped } from '../shared/endpoints.ts';
 import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, rulesKey, type Settings } from '../shared/settings.ts';
+import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
 import { CHROMIUM } from '../shared/target.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
@@ -54,7 +54,7 @@ interface CacheEntry<T> {
 
 class Controller implements UiActions {
   /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
-  private settings!: Settings;
+  private settings!: PageSettings;
   private configured = false;
   private configuring = false;
   private pr: PrRef | null = null;
@@ -96,7 +96,7 @@ class Controller implements UiActions {
         this.setActive(msg.active);
         sendResponse(this.tabStatus());
       } else if (msg.type === 'config-changed') {
-        this.onConfigChanged(msg.settings, msg.remoteChanged);
+        this.onConfigChanged(msg.settings, msg.rulesChanged);
         sendResponse(null);
       }
       return undefined;
@@ -137,11 +137,10 @@ class Controller implements UiActions {
       .catch((err: unknown) => console.error('[PRune]', err));
   }
 
-  private onConfigChanged(settings: Settings, remoteChanged: boolean): void {
+  private onConfigChanged(settings: PageSettings, rulesChanged: boolean): void {
     if (!this.configured) return;
-    const rules = rulesKey(this.settings);
     this.settings = settings;
-    if (remoteChanged || rulesKey(settings) !== rules) {
+    if (rulesChanged) {
       // Results are only kept for the pruned files, so prune again from scratch.
       this.prCache.clear();
       if (this.pr) this.load(this.pr);
@@ -312,7 +311,7 @@ class Controller implements UiActions {
     return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey, basePath: pr.basePath }).catch(
       async (): Promise<Lookup> => ({
         // Not reachable right now: fetch everything, and read settings here.
-        settings: this.configured ? this.settings : await loadSettings(),
+        settings: this.configured ? this.settings : pageSettings(await loadSettings()),
         inactive: [],
         etag: null,
         capped: false,
