@@ -63,6 +63,7 @@ interface Pending {
   list: Promise<FetchedList | null>;
   /** Started along with the list when the stored one was capped. */
   totals: Promise<Partial<PrTotals>> | null;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 /** Fetches started on `lookup`, for the `prune` that follows, by tab and PR. */
@@ -72,16 +73,19 @@ const PENDING_TTL_MS = 30_000;
 
 /** Starts fetching for `id` (tab and PR) ahead of the `prune` message. */
 export function prefetch(id: string, basePath: string, etag: string | null, capped: boolean): void {
-  const entry: Pending = { list: fetchFileList(basePath, etag), totals: capped ? fetchTotals(basePath) : null };
-  pending.set(id, entry);
-  setTimeout(() => {
-    if (pending.get(id) === entry) pending.delete(id);
-  }, PENDING_TTL_MS);
+  if (pending.has(id)) clearTimeout(pending.get(id)!.timer);
+  pending.set(id, {
+    list: fetchFileList(basePath, etag),
+    totals: capped ? fetchTotals(basePath) : null,
+    // Only the id: the timer must not keep a parsed list alive.
+    timer: setTimeout(() => pending.delete(id), PENDING_TTL_MS),
+  });
 }
 
 /** What prefetch() started for `id`, if anything (only once). */
 export function takePrefetched(id: string): Pending | null {
   const entry = pending.get(id) ?? null;
+  if (entry) clearTimeout(entry.timer);
   pending.delete(id);
   return entry;
 }
