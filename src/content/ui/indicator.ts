@@ -1,3 +1,4 @@
+import { formatCount } from '../../shared/format.ts';
 import { BASE_CSS, el, icon, ICON_GEAR, ICON_SCISSORS, pathElement, statElement, styleElement, whyElement } from './theme.ts';
 import type { UiActions, ViewState } from './types.ts';
 
@@ -239,7 +240,7 @@ export class Indicator {
       const summary = el('div', 'summary');
       const counts = el('div');
       counts.append(
-        el('b', '', `${result.pruned.length.toLocaleString()} of ${result.original.files.toLocaleString()}`),
+        el('b', '', `${formatCount(result.pruned.length)} of ${formatCount(result.original.files)}`),
         ` file${result.original.files === 1 ? '' : 's'} pruned`,
       );
       summary.append(counts);
@@ -252,7 +253,7 @@ export class Indicator {
       }
       if (result.files.length < result.original.files) {
         summary.append(
-          el('div', '', `GitHub lists only the first ${result.files.length.toLocaleString()} files; the rest can't be checked.`),
+          el('div', '', `GitHub lists only the first ${formatCount(result.files.length)} files; the rest can't be checked.`),
         );
       }
       frag.append(summary);

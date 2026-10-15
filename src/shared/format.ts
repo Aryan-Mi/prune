@@ -26,7 +26,13 @@ export function replaceCount(original: string, value: number): string {
   return original.slice(0, m.index) + groupDigits(value, separator) + original.slice(m.index + m[0].length);
 }
 
-/** Display formatting for PRune's own UI. */
+let numberFormat: Intl.NumberFormat | null = null;
+
+/**
+ * Display formatting for PRune's own UI; same output as `toLocaleString()`,
+ * which builds a new formatter on every call.
+ */
 export function formatCount(value: number): string {
-  return value.toLocaleString();
+  numberFormat ??= new Intl.NumberFormat();
+  return numberFormat.format(value);
 }

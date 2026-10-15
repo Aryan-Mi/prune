@@ -1,3 +1,5 @@
+import { formatCount } from '../../shared/format.ts';
+
 /**
  * Shared shadow-DOM styles. Colors come from GitHub's Primer CSS variables,
  * which inherit through the shadow boundary, so light/dark/high-contrast
@@ -91,10 +93,10 @@ export function statElement(additions: number, deletions: number): HTMLElement {
   stat.className = 'stat';
   const add = document.createElement('span');
   add.className = 'add';
-  add.textContent = `+${additions.toLocaleString()}`;
+  add.textContent = `+${formatCount(additions)}`;
   const del = document.createElement('span');
   del.className = 'del';
-  del.textContent = ` −${deletions.toLocaleString()}`;
+  del.textContent = ` −${formatCount(deletions)}`;
   stat.append(add, del);
   return stat;
 }
