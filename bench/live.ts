@@ -13,8 +13,9 @@
  * split by the share of the elements it restyled because of PRune. Those are
  * the invalidations recorded with a content script stack (attribute and DOM
  * changes; invalidation sets scheduled from it), and every element restyled
- * because a stylesheet changed when PRune had changed its own just before.
- * Tracing invalidations slows the page down, so these numbers are inflated
+ * because a stylesheet changed when PRune had changed its own just before
+ * (and the page had not: then that restyle would have happened anyway).
+ * In Chromium any stylesheet change restyles the whole document. Tracing invalidations slows the page down, so these numbers are inflated
  * (roughly 1.5×); compare them between builds, not with the CPU numbers.
  *
  * Interactions (revealing a diff from the "Pruned files" section, switching
@@ -64,6 +65,9 @@ const SCENARIOS: Scenario[] = [
   { name: 'non-PR page (repo home)', url: 'https://github.com/vitejs/vite', idle: true },
   // Opening a PR from another GitHub page without a page load (GitHub's soft navigation).
   { name: 'repo → small PR (soft nav)', url: 'https://github.com/vitejs/vite', softNav: '/vitejs/vite/pull/23648' },
+  // Switching tabs of a big PR: the diffs' rules start or stop applying.
+  { name: 'huge PR · conv. → files (soft)', url: 'https://github.com/nodejs/node/pull/65161', softNav: '/nodejs/node/pull/65161/files' },
+  { name: 'huge PR · files → conv. (soft)', url: 'https://github.com/nodejs/node/pull/65161/files', softNav: '/nodejs/node/pull/65161' },
   // Clicks on a big, fully loaded diff page (each is a sample of its own).
   { name: 'huge PR · files ·', url: 'https://github.com/nodejs/node/pull/65161/files', interactions: true },
 ];
@@ -221,19 +225,43 @@ const TIMELINE = ['devtools.timeline', 'disabled-by-default-devtools.timeline'];
 const INVALIDATIONS = 'disabled-by-default-devtools.timeline.invalidationTracking';
 /** Reasons for restyling elements after a stylesheet was added, removed or changed. */
 const SHEET_REASONS = new Set(['Style rule change', 'ActiveStylesheetsUpdate', '@keyframes rule change', 'PropertyRegistration']);
-/** Main-world timestamp in the trace when PRune adds, removes or rewrites a stylesheet of its own (`#prune-*`). */
+/**
+ * Main-world timestamps in the trace: PRune added, removed or rewrote a
+ * stylesheet of its own (`#prune-*`), or the page did one of its own (then the
+ * restyle would have happened anyway).
+ */
 const SHEET_MARK = 'prune-sheet';
+const PAGE_SHEET_MARK = 'page-sheet';
 
-/** Runs in the page (main world) during traced loads: marks PRune's stylesheet changes in the trace. */
+/** Runs in the page (main world) during traced loads: marks stylesheet changes in the trace. */
 function markSheetChanges(): void {
-  const ours = (n: Node) => (n.nodeName === 'STYLE' || n.nodeName === 'LINK') && (n as Element).id.startsWith('prune');
+  const sheet = (n: Node) => n.nodeName === 'STYLE' || (n.nodeName === 'LINK' && (n as HTMLLinkElement).rel === 'stylesheet');
+  const ours = (n: Node) => sheet(n) && (n as Element).id.startsWith('prune');
+  /** Linked sheets still loading: they apply in the first frame after they have. */
+  const loading = new Set<HTMLLinkElement>();
+  const watch = () =>
+    requestAnimationFrame(() => {
+      for (const link of loading) {
+        if (!link.sheet && link.isConnected) continue;
+        loading.delete(link);
+        console.timeStamp('page-sheet');
+      }
+      if (loading.size > 0) watch();
+    });
   new MutationObserver((records) => {
+    let mark = '';
     for (const r of records) {
-      if (ours(r.target) || [...r.addedNodes].some(ours) || [...r.removedNodes].some(ours)) {
-        console.timeStamp('prune-sheet');
-        return;
+      for (const n of [r.target, ...r.addedNodes, ...r.removedNodes]) {
+        if (ours(n)) mark ||= 'prune-sheet';
+        else if (n.nodeName === 'LINK' && n !== r.target && n.isConnected && !(n as HTMLLinkElement).sheet && sheet(n)) {
+          if (loading.size === 0) watch();
+          loading.add(n as HTMLLinkElement);
+        }
+        // A style element's text, or a sheet added or removed (one in a <head> GitHub swapped included).
+        else if (sheet(n) && (n !== r.target || n.nodeName === 'STYLE')) mark = 'page-sheet';
       }
     }
+    if (mark) console.timeStamp(mark);
   }).observe(document, { childList: true, subtree: true });
 }
 
@@ -272,7 +300,10 @@ function attributeStyle(events: TraceEvent[]): { styleMs: number; layoutMs: numb
   for (const thread of threads.values()) {
     let ours = 0;
     let all = 0;
+    // Until a recalc applies them (a linked sheet may take a few frames to load).
     let sheetChanged = false;
+    let pageSheetChanged = false;
+    let sheetsApplied = false;
     let layoutOurs = 0;
     let layoutAll = 0;
     /** Invalidation sets scheduled since the last recalc: whether by PRune only. */
@@ -303,7 +334,7 @@ function attributeStyle(events: TraceEvent[]): { styleMs: number; layoutMs: numb
         frameMs = ms;
         maxFrameMs = Math.max(maxFrameMs, frameMs);
         ours = all = 0;
-        sheetChanged = false;
+        if (sheetsApplied) sheetChanged = pageSheetChanged = sheetsApplied = false;
         sets = new Map();
       }
     };
@@ -312,6 +343,7 @@ function attributeStyle(events: TraceEvent[]): { styleMs: number; layoutMs: numb
       switch (e.name) {
         case 'TimeStamp':
           if ((e.args.data?.message ?? e.args.message) === SHEET_MARK) sheetChanged = true;
+          if ((e.args.data?.message ?? e.args.message) === PAGE_SHEET_MARK) pageSheetChanged = true;
           break;
         case 'ScheduleStyleInvalidationTracking': {
           const id = e.args.data?.invalidationSet;
@@ -328,7 +360,8 @@ function attributeStyle(events: TraceEvent[]): { styleMs: number; layoutMs: numb
         }
         case 'StyleRecalcInvalidationTracking':
           all++;
-          if (fromUs(e) || (sheetChanged && SHEET_REASONS.has(e.args.data?.reason ?? ''))) {
+          if (SHEET_REASONS.has(e.args.data?.reason ?? '')) sheetsApplied = true;
+          if (fromUs(e) || (sheetChanged && !pageSheetChanged && SHEET_REASONS.has(e.args.data?.reason ?? ''))) {
             ours++;
             explain(e, e.args.data?.reason ?? '?');
           }
