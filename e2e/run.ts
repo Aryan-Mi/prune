@@ -201,6 +201,21 @@ try {
     `got +${fromRepo.additions}`,
   );
 
+  // ---- And back and forth (history traversal) -----------------------------------
+  // Off PR pages the full script only follows navigations, without observing the page.
+  await page.goBack();
+  await page.waitForURL((u) => u.pathname === '/vitejs/vite');
+  await page.waitForTimeout(1000);
+  check('indicator leaves with the PR', !(await page.locator('[data-prune-ui="indicator"]').isVisible()));
+  await page.goForward();
+  await page.waitForURL(/\/pull\/23648$/);
+  let forward = await readHeader(page);
+  for (let i = 0; i < 50 && forward.additions !== expected.additions; i++) {
+    await page.waitForTimeout(100);
+    forward = await readHeader(page);
+  }
+  check('PR is pruned again after going forward', forward.additions === expected.additions, `got +${forward.additions}`);
+
   check('no PRune errors in console', errors.length === 0, errors.join('; '));
 } finally {
   await context.close();

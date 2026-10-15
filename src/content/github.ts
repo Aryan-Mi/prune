@@ -1,5 +1,6 @@
 import { REPO_CONFIG_PATHS } from '../shared/defaults.ts';
 import type { PrTotals } from '../shared/filetree.ts';
+import { PR_PATH } from './route.ts';
 
 export interface PrRef {
   owner: string;
@@ -16,8 +17,6 @@ export interface PrRef {
   /** True on the "Files changed" tab only (the whole PR's diff). */
   isFilesTab: boolean;
 }
-
-const PR_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/([^/]+)(\/[^/]+)?)?/;
 
 export function parsePrUrl(pathname: string): PrRef | null {
   const m = PR_PATH.exec(pathname);

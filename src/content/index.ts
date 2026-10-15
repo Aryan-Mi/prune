@@ -9,6 +9,7 @@ import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
 import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef, type RepoConfig } from './github.ts';
 import { Indicator } from './ui/indicator.ts';
+import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
 import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
 
@@ -71,7 +72,7 @@ class Controller implements UiActions {
   private section: PrunedSection | null = null;
   private sectionContainer: Element | null = null;
 
-  private readonly observer = new MutationObserver(() => this.onMutation());
+  private readonly observer = new MutationObserver(() => this.onChange());
   private checkTimer = 0;
   private retryTimer = 0;
   private lastCheck = 0;
@@ -89,11 +90,10 @@ class Controller implements UiActions {
       return undefined;
     });
 
-    // One observer for the whole page; the callback only schedules a check (and
-    // pauses itself until then), so its cost is constant no matter how many
-    // nodes GitHub adds.
-    this.observe();
-    window.addEventListener('popstate', () => this.scheduleCheck());
+    // On PR pages, one observer for the whole page; the callback only schedules
+    // a check (and pauses itself until then), so its cost is constant no matter
+    // how many nodes GitHub adds. Elsewhere only navigations are followed.
+    onNavigation(() => this.onChange());
     // Back/forward-cache restores bring back a frozen DOM without mutations.
     window.addEventListener('pageshow', (e) => {
       if (e.persisted) this.href = '';
@@ -102,11 +102,7 @@ class Controller implements UiActions {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') this.scheduleCheck();
     });
-    document.addEventListener('turbo:load', () => this.scheduleCheck());
     window.addEventListener('load', () => this.scheduleCheck());
-    (globalThis as { navigation?: EventTarget }).navigation?.addEventListener('navigatesuccess', () =>
-      this.scheduleCheck(),
-    );
     this.check();
   }
 
@@ -142,7 +138,7 @@ class Controller implements UiActions {
     this.observer.observe(document, { childList: true, subtree: true });
   }
 
-  private onMutation(): void {
+  private onChange(): void {
     // A navigation: handle it right away, before the new page is painted.
     if (location.href !== this.href) this.check();
     else this.scheduleCheck();
@@ -167,13 +163,18 @@ class Controller implements UiActions {
    */
   private check(fromMutation = true): void {
     this.lastCheck = performance.now();
-    this.observe();
     if (location.href !== this.href) {
       this.href = location.href;
-      this.onLocationChange();
+      const pr = parsePrUrl(location.pathname);
+      // Off PR pages there is nothing to keep up with between navigations.
+      if (pr) this.observe();
+      else this.observer.disconnect();
+      this.onLocationChange(pr);
       return;
     }
-    if (!this.pr || !this.isEnabledHere()) return;
+    if (!this.pr) return;
+    this.observe();
+    if (!this.isEnabledHere()) return;
     this.styles.ensure();
     if (this.isPruning()) {
       const now = performance.now();
@@ -197,8 +198,7 @@ class Controller implements UiActions {
     this.retryTimer = window.setTimeout(() => this.check(false), delay + 10);
   }
 
-  private onLocationChange(): void {
-    const pr = parsePrUrl(location.pathname);
+  private onLocationChange(pr: PrRef | null): void {
     if (pr && !this.configured) {
       // GitHub's responses don't depend on settings: fetch them while they load.
       this.prefetched = { key: pr.key, promise: this.fetchPr(pr) };
