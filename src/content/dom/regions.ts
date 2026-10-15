@@ -74,21 +74,21 @@ function findTree(files: readonly PrFile[]): Element | null {
 }
 
 /** `document.querySelectorAll(selector)` without the subtrees of `skip`, in document order. */
-export function queryOutside<E extends Element = Element>(selector: string, skip: readonly Element[]): Iterable<E> {
+export function queryOutside(selector: string, skip: readonly Element[]): Iterable<Element> {
   const root = document.documentElement;
   // Only proper containers in the document itself (not <html>/<body>, not in a shadow tree).
   const skipped = new Set(skip.filter((el) => el !== document.body && el !== root && root.contains(el)));
-  if (skipped.size === 0) return document.querySelectorAll<E>(selector);
+  if (skipped.size === 0) return document.querySelectorAll(selector);
   const ancestors = new Set<Element>();
   for (const el of skipped) for (let n = el.parentElement; n && !ancestors.has(n); n = n.parentElement) ancestors.add(n);
-  const found: E[] = root.matches(selector) ? [root as Element as E] : [];
+  const found: Element[] = root.matches(selector) ? [root] : [];
   // Walk down the ancestors of skipped elements; their other children are queried whole.
   const visit = (parent: Element): void => {
     for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
       if (skipped.has(child)) continue;
-      if (child.matches(selector)) found.push(child as E);
+      if (child.matches(selector)) found.push(child);
       if (ancestors.has(child)) visit(child);
-      else for (const el of child.querySelectorAll<E>(selector)) found.push(el);
+      else for (const el of child.querySelectorAll(selector)) found.push(el);
     }
   };
   visit(root);
