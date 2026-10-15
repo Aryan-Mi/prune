@@ -44,7 +44,7 @@ Rules are evaluated in this order, and **the last matching rule wins**:
 | Layer | Where it lives | Notes |
 | --- | --- | --- |
 | Built-in defaults | the extension | Lockfiles, minified files & source maps, test snapshots, generated code, vendored/build output. You can switch each group off in Settings. |
-| Repository rules | `.pruneignore` (or `.github/pruneignore`) in the repo's default branch | Picked up automatically, so a team can share rules. Works on private repos with your normal GitHub session. |
+| Repository rules | `.pruneignore` (or `.github/pruneignore`) in the repo's default branch | Picked up automatically (and re-checked every 10 minutes), so a team can share rules. Works on private repos with your normal GitHub session. |
 | Rules file URL | any `https://` URL, e.g. a raw file in your dotfiles repo or a gist | Fetched in the background and refreshed hourly. Edit the file and PRune follows; no need to touch the extension. |
 | Your rules | the Settings page | Typed in or imported from a file. |
 | `linguist-generated` | the repo's `.gitattributes` | Files GitHub already knows are generated are pruned too (can be switched off). |
@@ -80,6 +80,8 @@ Performance was a design constraint from the start:
 
 - **No diff downloading or parsing.** PRune reads `/{owner}/{repo}/pull/{n}/page_data/file_tree`, the same-origin JSON endpoint GitHub's own UI uses. It returns every file's path, line stats and `sha256(path)` digest in one request (~250 bytes per file) and works on private repos with your session. No API token is needed.
 - **The heavy lifting happens off the page.** The content script fetches that response (it has to, for your session) and hands the text straight to the extension's background script, which parses it and runs the rules. Only the pruned files come back. On a 3,000-file PR the page never parses the 700 KB response, never holds the file list, and doesn't even load the rule matcher.
+- **A PR's file list is passed along once.** The background script keeps parsed lists (in memory, for the browser session) with GitHub's `ETag` for them, a hash of the response. When you reload or reopen a PR and GitHub's response has the same `ETag`, the page doesn't even read it, and the repo's `.pruneignore` isn't fetched again either. Lists are kept per Firefox container and never for private windows, and are only ever used after GitHub answered the tab's own request, so access checks still apply.
+- **No storage reads in the page.** Settings and the per-tab on/off state come with the background script's first reply, and changes are pushed to open PR tabs.
 - **Hiding is one stylesheet.** GitHub gives every file diff the DOM id `diff-<sha256(path)>`, in both the classic and the new React "Files changed" UI. PRune injects a single `<style>` with rules for those ids, and the browser applies it to diffs as they stream in, lazy-load or re-render. There's no per-file JavaScript and no node is ever moved, so React's tree is never disturbed.
 - **Counts are patched in place.** The header's text nodes get their `nodeValue` rewritten (never replaced), found by matching the exact totals GitHub reports. They are looked for where GitHub's own ids (`#diffstat`, `#files_tab_counter`, `#prs-files-anchor-tab`) and the last search say they are, a few dozen elements; the whole page is searched only while something is missing, and every few seconds for copies like sticky headers. If React re-renders, PRune notices and re-applies.
 - **Almost nothing runs outside PRs.** The content script is only injected on PR pages. The rest of GitHub gets a ~500-byte loader that listens for GitHub's navigation events and imports the content script if you open a PR without a page load. Neither watches the DOM there.
@@ -87,7 +89,7 @@ Performance was a design constraint from the start:
 - **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~1.5 ms, in the background script.
 - **Lazy UI.** Up front there is only the ✂ pill: a button, an icon and a short stylesheet. The popover and its styles are built on first open, and the "Pruned files" section is an empty placeholder until it scrolls near the viewport.
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 8 ms of the page's main-thread time in total on the conversation tab and 12 ms on the Files changed tab, no single task longer than ~3 ms, and keeps ~120–170 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms) runs in the extension's own process, and the file list is dropped as soon as it's done.
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 6–7 ms of the page's main-thread time in total on the conversation tab and 9–11 ms on the Files changed tab when the PR is reloaded or reopened (about 1.5 ms more the first time, to hand the file list over), no single task longer than ~3 ms, and keeps ~115–160 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms; ~2 ms for a stored list) runs in the extension's own process.
 
 ## Development
 
@@ -115,7 +117,8 @@ src/
     github.ts  URL parsing + GitHub data endpoints
     dom/       stylesheet hiding, header count patching, collapse mode
     ui/        the ✂ pill + popover, the "Pruned files" section (Shadow DOM)
-  background/  parses + prunes file lists for the content script; fetches the remote rules file
+  background/  parses + prunes file lists for the content script, keeps them by ETag;
+               settings + per-tab state for PR tabs; fetches the remote rules file
   popup/       toolbar popup
   options/     settings page
 scripts/       build + icon generation

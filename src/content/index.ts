@@ -1,13 +1,13 @@
 import { ext } from '../shared/browser.ts';
-import type { Message, TabStatus } from '../shared/messages.ts';
+import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, onConfigChanged, rulesKey, type Settings } from '../shared/settings.ts';
+import { isRepoDisabled, loadSettings, rulesKey, type Settings } from '../shared/settings.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
-import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef, type RepoConfig } from './github.ts';
+import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef } from './github.ts';
 import { Indicator } from './ui/indicator.ts';
 import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
@@ -15,7 +15,6 @@ import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
 
 /** A PR's result is reused across tab switches for this long before refetching. */
 const PR_DATA_TTL_MS = 60_000;
-const REPO_CONFIG_TTL_MS = 10 * 60_000;
 /** Minimum gap between DOM checks while the page is mutating. */
 const CHECK_INTERVAL_MS = 100;
 /**
@@ -26,7 +25,6 @@ const CHECK_INTERVAL_MS = 100;
 const RESCAN_INTERVAL_MS = 4000;
 /** Whole-page search gap while some header counter has not been found yet (page still rendering). */
 const INCOMPLETE_RESCAN_MS = 250;
-const INACTIVE_KEY = 'prune:inactive';
 
 interface PrData {
   /** The PR this data belongs to. */
@@ -37,8 +35,13 @@ interface PrData {
 
 /** GitHub's responses for a PR, on their way to the background script. */
 interface PrResponses {
-  fileTree: string;
+  /** The file_tree response, body unread. */
+  fileTree: Response;
+  /** ETag of the file list the background script has stored for this PR. */
+  storedEtag: string | null;
   totals: Partial<PrTotals>;
+  repo: RepoConfig;
+  repoFetched: boolean;
 }
 
 interface CacheEntry<T> {
@@ -61,10 +64,9 @@ class Controller implements UiActions {
   private readonly prCache = new Map<string, CacheEntry<PrData>>();
   /** Responses fetched while settings were still loading. */
   private prefetched: { key: string; promise: Promise<PrResponses> } | null = null;
-  private readonly repoCache = new Map<string, CacheEntry<RepoConfig>>();
   private readonly revealed = new Map<string, Set<string>>();
-  /** PRs switched off in this tab; read from sessionStorage on first use (it costs ~1 ms). */
-  private inactiveKeys: Set<string> | null = null;
+  /** PRs switched off in this tab; the background script keeps them across page loads. */
+  private readonly inactive = new Set<string>();
   private loadToken = 0;
 
   private readonly styles = new PruneStyles();
@@ -90,6 +92,9 @@ class Controller implements UiActions {
       } else if (msg.type === 'set-active') {
         this.setActive(msg.active);
         sendResponse(this.tabStatus());
+      } else if (msg.type === 'config-changed') {
+        this.onConfigChanged(msg.settings, msg.remoteChanged);
+        sendResponse(null);
       }
       return undefined;
     });
@@ -110,29 +115,36 @@ class Controller implements UiActions {
     this.check();
   }
 
-  /** Loads settings once, then handles the current page again. */
-  private configure(): void {
+  /**
+   * Takes the settings from the background script's reply to the first PR
+   * page's `lookup`, then handles the current page again. Changes are pushed
+   * from there too, so this script never reads extension storage.
+   */
+  private configure(lookup: Promise<Lookup>): void {
     if (this.configuring) return;
     this.configuring = true;
-    loadSettings()
-      .then((settings) => {
+    lookup
+      .then(({ settings, inactive }) => {
         this.settings = settings;
+        for (const key of inactive) this.inactive.add(key);
         this.configured = true;
-        onConfigChanged(async (remoteChanged) => {
-          const rules = rulesKey(this.settings);
-          this.settings = await loadSettings();
-          if (remoteChanged || rulesKey(this.settings) !== rules) {
-            // Results are only kept for the pruned files, so prune again from scratch.
-            this.prCache.clear();
-            if (this.pr) this.load(this.pr);
-            return;
-          }
-          this.render();
-        });
         this.href = '';
         this.check();
       })
       .catch((err: unknown) => console.error('[PRune]', err));
+  }
+
+  private onConfigChanged(settings: Settings, remoteChanged: boolean): void {
+    if (!this.configured) return;
+    const rules = rulesKey(this.settings);
+    this.settings = settings;
+    if (remoteChanged || rulesKey(settings) !== rules) {
+      // Results are only kept for the pruned files, so prune again from scratch.
+      this.prCache.clear();
+      if (this.pr) this.load(this.pr);
+      return;
+    }
+    this.render();
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -205,9 +217,10 @@ class Controller implements UiActions {
   private onLocationChange(pr: PrRef | null): void {
     if (pr && !this.configured) {
       // GitHub's responses don't depend on settings: fetch them while they load.
-      this.prefetched = { key: pr.key, promise: this.fetchPr(pr) };
+      const lookup = this.lookup(pr);
+      this.prefetched = { key: pr.key, promise: this.fetchPr(pr, lookup) };
       this.prefetched.promise.catch(() => {});
-      this.configure();
+      this.configure(lookup);
       return;
     }
     const prev = this.pr;
@@ -268,39 +281,58 @@ class Controller implements UiActions {
    * Fetches the PR's file list here (same-origin, so private repos work) and
    * has the background script parse and prune it. On a 3000-file PR that is a
    * 700 KB JSON response; the page never parses it or keeps any of it, and
-   * gets back only the pruned files.
+   * gets back only the pruned files. If the background script already has
+   * this exact list (from an earlier visit; GitHub's ETag says so), the
+   * response isn't even read, let alone passed along.
    */
   private prData(pr: PrRef): Promise<PrData> {
     let entry = this.prCache.get(pr.key);
     if (!entry || Date.now() - entry.at > PR_DATA_TTL_MS) {
       const prefetched = this.prefetched?.key === pr.key ? this.prefetched.promise : null;
       this.prefetched = null;
-      const promise = Promise.all([prefetched ?? this.fetchPr(pr), this.repoConfig(pr)]).then(
-        ([{ fileTree, totals }, repo]) =>
-          sendMessage<PruneResult>({ type: 'prune', fileTree, totals, repoText: repo.text, repoPath: repo.path }).then(
-            (result) => ({ key: pr.key, result, repoConfigPath: repo.path }),
-          ),
-      );
+      const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
+        const res = responses.fileTree;
+        const etag = res.headers.get('ETag');
+        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
+        if (result) discard(res);
+        // Not stored (any more): send the list over.
+        else result = await prune(pr, responses, await res.text(), etag);
+        if (!result) throw new Error('Could not prune this pull request');
+        return { key: pr.key, result, repoConfigPath: responses.repo.path };
+      });
       entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
       promise.catch(() => this.prCache.delete(pr.key));
     }
     return entry.promise;
   }
 
-  private fetchPr(pr: PrRef): Promise<PrResponses> {
-    // A Chromium service worker may need waking up; do it while GitHub responds.
-    sendMessage({ type: 'warm' }).catch(() => {});
-    return Promise.all([fetchFileTree(pr), fetchPrTotals(pr)]).then(([fileTree, totals]) => ({ fileTree, totals }));
+  /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
+  private lookup(pr: PrRef): Promise<Lookup> {
+    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
+      async (): Promise<Lookup> => ({
+        // Not reachable right now: fetch everything, and read settings here.
+        settings: this.configured ? this.settings : await loadSettings(),
+        inactive: [],
+        etag: null,
+        repo: null,
+      }),
+    );
   }
 
-  private repoConfig(pr: PrRef): Promise<RepoConfig> {
-    if (!this.settings.useRepoConfig) return Promise.resolve({ path: null, text: null });
-    let entry = this.repoCache.get(pr.repoKey);
-    if (!entry || Date.now() - entry.at > REPO_CONFIG_TTL_MS) {
-      const promise = fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }));
-      entry = cache(this.repoCache, pr.repoKey, promise, REPO_CONFIG_TTL_MS);
-    }
-    return entry.promise;
+  /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
+  private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
+    return Promise.all([
+      fetchFileTree(pr),
+      fetchPrTotals(pr),
+      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+      lookup,
+    ]).then(([fileTree, totals, repo, stored]) => ({
+      fileTree,
+      storedEtag: stored.etag,
+      totals,
+      repo,
+      repoFetched: !stored.repo,
+    }));
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -314,11 +346,7 @@ class Controller implements UiActions {
   }
 
   private isActive(): boolean {
-    return !!this.pr && !this.inactive().has(this.pr.key);
-  }
-
-  private inactive(): Set<string> {
-    return (this.inactiveKeys ??= new Set(readInactive()));
+    return !!this.pr && !this.inactive.has(this.pr.key);
   }
 
   private isPruning(): boolean {
@@ -473,10 +501,9 @@ class Controller implements UiActions {
 
   setActive(active: boolean): void {
     if (!this.pr) return;
-    const inactive = this.inactive();
-    if (active) inactive.delete(this.pr.key);
-    else inactive.add(this.pr.key);
-    writeInactive(inactive);
+    if (active) this.inactive.delete(this.pr.key);
+    else this.inactive.add(this.pr.key);
+    sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
   }
 
@@ -554,6 +581,33 @@ function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
 }
 
+function prune(
+  pr: PrRef,
+  { totals, repo, repoFetched }: PrResponses,
+  fileTree: string | null,
+  etag: string | null,
+): Promise<PruneResult | null> {
+  return sendMessage<PruneResult | null>({
+    type: 'prune',
+    key: pr.key,
+    repoKey: pr.repoKey,
+    fileTree,
+    etag,
+    totals,
+    repo,
+    repoFetched,
+  });
+}
+
+/** Lets go of a response that won't be read. */
+function discard(res: Response): void {
+  try {
+    res.body?.cancel().catch(() => {});
+  } catch {
+    // Only frees the connection's buffers early; the response is dropped anyway.
+  }
+}
+
 /** Messages the background script; it replies `{ error }` when something failed. */
 async function sendMessage<T = unknown>(msg: Message): Promise<T> {
   const reply = (await ext.runtime.sendMessage(msg)) as T | { error: string } | undefined;
@@ -566,24 +620,6 @@ function filesTabPath(pr: PrRef): string {
     if (link.pathname === `${pr.basePath}/changes` || link.pathname === `${pr.basePath}/files`) return link.pathname;
   }
   return `${pr.basePath}/files`;
-}
-
-function readInactive(): string[] {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(INACTIVE_KEY) ?? '[]') as unknown;
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeInactive(keys: Set<string>): void {
-  try {
-    if (keys.size === 0) sessionStorage.removeItem(INACTIVE_KEY);
-    else sessionStorage.setItem(INACTIVE_KEY, JSON.stringify([...keys]));
-  } catch {
-    // Storage can be unavailable (e.g. blocked); the toggle then lasts until reload.
-  }
 }
 
 new Controller().start();

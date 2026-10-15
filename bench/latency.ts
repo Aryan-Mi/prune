@@ -1,10 +1,12 @@
 /**
  * How long after GitHub's responses arrive the pruned numbers show up, in
  * Chromium with the extension loaded. Each run uses a fresh browser, so the
- * extension's service worker starts cold, as on a first PR visit.
+ * extension's service worker starts cold, as on a first PR visit. With
+ * --revisit, the PR is opened once first and the second visit is measured
+ * (the background script then has the file list, and GitHub answers 304).
  *
  *   node bench/latency.ts [--runs=5] [--extension=dist/chrome] [--pr=<url>]
- *     [--from=<url>]
+ *     [--from=<url>] [--revisit]
  *
  * "after data" is from the last of PRune's GitHub requests (file_tree,
  * diffstat, tab_counts) finishing to the ✂ pill switching on; "after
@@ -24,6 +26,7 @@ const extensionPath = resolve(root, arg('extension', 'dist/chrome'));
 const runs = Number(arg('runs', '5'));
 const pr = arg('pr', 'https://github.com/nodejs/node/pull/65161');
 const from = arg('from', '');
+const revisit = process.argv.includes('--revisit');
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[xs.length >> 1]!;
 const afterData: number[] = [];
@@ -42,6 +45,21 @@ for (let run = 0; run < runs; run++) {
     page.on('requestfinished', (req) => {
       if (/\/page_data\/(file_tree|diffstat|tab_counts)$/.test(req.url())) dataAt = Date.now();
     });
+    const shown = () =>
+      page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-prune-ui="indicator"]')
+            ?.shadowRoot?.querySelector('.pill.active')
+            ?.textContent?.includes('pruned'),
+        undefined,
+        { polling: 'raf', timeout: 30_000 },
+      );
+    if (revisit) {
+      await page.goto(pr, { waitUntil: 'commit' });
+      await shown();
+      await page.goto('about:blank');
+    }
     if (from) await page.goto(from, { waitUntil: 'load' });
     const start = Date.now();
     if (from) {
@@ -54,15 +72,7 @@ for (let run = 0; run < runs; run++) {
     } else {
       await page.goto(pr, { waitUntil: 'commit' });
     }
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector('[data-prune-ui="indicator"]')
-          ?.shadowRoot?.querySelector('.pill.active')
-          ?.textContent?.includes('pruned'),
-      undefined,
-      { polling: 'raf', timeout: 30_000 },
-    );
+    await shown();
     const shownAt = Date.now();
     afterData.push(shownAt - dataAt);
     afterNav.push(shownAt - start);
