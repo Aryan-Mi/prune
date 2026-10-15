@@ -39,6 +39,8 @@ const STYLE_ID = 'prune-style';
 const ON_ATTR = 'data-prune-on';
 /** On diffs and tree rows of files shown again. */
 const SHOW_ATTR = 'data-prune-show';
+/** Longest wait for GitHub to take a tab's diffs away before the rules stop applying anyway. */
+const LEAVE_MS = 3000;
 
 export interface StyleOptions {
   diffMode: DiffMode;
@@ -73,12 +75,20 @@ export class PruneStyles {
   private shown: string[] = [];
   /** Elements marked as shown. */
   private marked: Element[] = [];
+  /** Set while leaving the diffs for another tab of the PR (see leave()). */
+  private leaveTimer = 0;
 
+  /** Applies the rules for `result`; null when the page has no diffs (another tab of the PR). */
   update(result: PruneResult | null, options: StyleOptions): void {
-    if (!result || result.pruned.length === 0) {
+    if (!result) {
+      this.leave();
+      return;
+    }
+    if (result.pruned.length === 0) {
       this.off();
       return;
     }
+    this.stopLeaving();
     const { diffMode, treeMode } = options;
     const built = this.built;
     // A PR's data is refetched now and then: the same files need no new sheet.
@@ -104,6 +114,10 @@ export class PruneStyles {
    */
   ensure(): void {
     if (!this.on || !this.el) return;
+    if (this.leaveTimer && !this.diffsShown()) {
+      this.off();
+      return;
+    }
     if (!this.el.isConnected) (document.head ?? document.documentElement).append(this.el);
     const root = document.documentElement;
     if (GATED && !root.hasAttribute(ON_ATTR)) root.setAttribute(ON_ATTR, '');
@@ -119,6 +133,7 @@ export class PruneStyles {
 
   /** Stops applying the rules, keeping them for when they apply again (same PR). */
   off(): void {
+    this.stopLeaving();
     if (!this.on) return;
     this.on = false;
     if (GATED) document.documentElement.removeAttribute(ON_ATTR);
@@ -131,6 +146,31 @@ export class PruneStyles {
     this.built = null;
     this.unmark(new Set());
     this.shown = [];
+  }
+
+  /**
+   * Leaving the diffs for another tab of the PR: the rules stop applying once
+   * GitHub has taken the diffs away. Until then they're still there, and
+   * showing the pruned ones would only restyle (in a big PR, ~100k) elements
+   * that are about to go.
+   */
+  private leave(): void {
+    if (!this.on || this.leaveTimer) return;
+    if (!this.diffsShown()) {
+      this.off();
+      return;
+    }
+    this.leaveTimer = window.setTimeout(() => this.off(), LEAVE_MS);
+  }
+
+  private stopLeaving(): void {
+    clearTimeout(this.leaveTimer);
+    this.leaveTimer = 0;
+  }
+
+  /** Whether the page still has a pruned file's diff. */
+  private diffsShown(): boolean {
+    return !!this.built?.result.pruned.some((f) => document.getElementById(`diff-${f.digest}`));
   }
 
   private reveal(result: PruneResult, revealed: ReadonlySet<string>): void {
