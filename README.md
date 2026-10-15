@@ -84,9 +84,9 @@ Performance was a design constraint from the start:
 - **Counts are patched in place.** The header's text nodes get their `nodeValue` rewritten (never replaced), found by matching the exact totals GitHub reports. If React re-renders, PRune notices and re-applies.
 - **One cheap observer.** A single `MutationObserver` only schedules a check, and pauses until it has run. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows). Looking for the header counters skips the diff list and file tree, which on a big PR are nearly the whole page.
 - **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~1.5 ms, in the background script.
-- **Lazy UI.** The popover's file list is built on first open, and the "Pruned files" rows when the section scrolls near the viewport.
+- **Lazy UI.** Up front there is only the ✂ pill: a button, an icon and a short stylesheet. The popover and its styles are built on first open, and the "Pruned files" section is an empty placeholder until it scrolls near the viewport.
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 8 ms of the page's main-thread time in total on the conversation tab and 12 ms on the Files changed tab, no single task longer than ~3 ms, and keeps ~120–170 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~1 ms and ~55 KB. The background script's share (parsing and matching, ~4 ms) runs in the extension's own process, and the file list is dropped as soon as it's done.
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 7 ms of the page's main-thread time in total on the conversation tab and 10 ms on the Files changed tab, no single task longer than ~2.5 ms, and keeps ~120–150 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~1 ms and ~55 KB. The background script's share (parsing and matching, ~4 ms) runs in the extension's own process, and the file list is dropped as soon as it's done.
 
 ## Development
 
