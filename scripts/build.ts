@@ -136,6 +136,8 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
       ...common,
       entryPoints: { content: join(root, 'src/content/index.ts') },
       minify: !readable,
+      // Chromium and Firefox restyle differently when stylesheets and attributes change (dom/styles.ts).
+      define: { PRUNE_ENGINE: target === 'chrome' ? '"blink"' : '"gecko"' },
       plugins: readable ? [] : [minifyCssTemplates],
     },
     {
