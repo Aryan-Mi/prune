@@ -5,7 +5,7 @@
  * stack contains a content script frame, at 50µs resolution), memory from the
  * V8 sampling heap profiler (live objects allocated under content script
  * frames). "Content script" is any script of the extension running in the page
- * (content.js and loader.js).
+ * (content.js, loader.js and the chunks content.js imports).
  *
  *   bun run build:chrome && node bench/live.ts [--runs=5] [--json=out.json]
  *     [--only=<scenario regex>] [--breakdown] [--extension=dist/chrome]
@@ -73,9 +73,9 @@ interface CpuProfile {
   startTime: number;
 }
 
-const OUR_SCRIPT = /^chrome-extension:\/\/[^/]+\/(content|loader)\.js$/;
-/** `loader:` for frames in loader.js, so functions of both scripts can be told apart. */
-const prefix = (url: string) => (url.endsWith('/loader.js') ? 'loader:' : '');
+const OUR_SCRIPT = /^chrome-extension:\/\/[^/]+\/[\w-]+\.js$/;
+/** `loader:`, `popover:`… for frames outside content.js, so functions of all scripts can be told apart. */
+const prefix = (url: string) => (url.endsWith('/content.js') ? '' : `${url.slice(url.lastIndexOf('/') + 1, -3)}:`);
 const SAMPLE_US = 50;
 
 /**
