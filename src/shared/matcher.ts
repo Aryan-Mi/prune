@@ -144,9 +144,8 @@ export function compileGlob(raw: string): CompiledGlob {
   return { kind: 'path', source: `^${out}${dirOnly ? '/.*$' : '(?:/.*)?$'}`, literal: null, suffix: null };
 }
 
-/** Full-path regex source equivalent to `compileGlob(raw)`. */
-export function globToRegexSource(raw: string): string {
-  const glob = compileGlob(raw);
+/** Full-path regex source equivalent to a compiled glob. */
+export function globToRegexSource(glob: CompiledGlob): string {
   if (glob.kind === 'path') return glob.source;
   const inner = glob.source.slice(1, -1);
   return `^(?:.*/)?${inner}${glob.kind === 'dir' ? '/.*$' : '(?:/.*)?$'}`;
@@ -171,6 +170,12 @@ function escapeChar(c: string): string {
   return REGEX_SPECIAL.test(c) || c === '[' || c === ']' || c === '*' || c === '?' ? `\\${c}` : c;
 }
 
+/** Compiles one pattern (without `!`); throws if it makes an invalid regex. */
+export function compileRule(pattern: string, negated: boolean, source: string): Rule {
+  const glob = compileGlob(pattern);
+  return { pattern, negated, source, glob, re: new RegExp(globToRegexSource(glob)) };
+}
+
 /** Parses .gitignore-style text into rules. Invalid lines are reported, not thrown. */
 export function parseRules(text: string, source: string): ParseResult {
   const rules: Rule[] = [];
@@ -190,8 +195,7 @@ export function parseRules(text: string, source: string): ParseResult {
     }
     if (line === '') continue;
     try {
-      const glob = compileGlob(line);
-      rules.push({ pattern: line, negated, source, glob, re: new RegExp(globToRegexSource(line)) });
+      rules.push(compileRule(line, negated, source));
     } catch (err) {
       errors.push({ line: idx + 1, text: lines[idx]!, message: (err as Error).message, source });
     }

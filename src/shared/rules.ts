@@ -1,5 +1,5 @@
 import { DEFAULT_GROUPS } from './defaults.ts';
-import { Matcher, parseRules, type Rule, type RuleError } from './matcher.ts';
+import { compileRule, Matcher, parseRules, type Rule, type RuleError } from './matcher.ts';
 import type { Settings } from './settings.ts';
 
 export interface RuleInputs {
@@ -24,7 +24,8 @@ function builtinRules(groupId: string): Rule[] {
   let rules = builtinCache.get(groupId);
   if (!rules) {
     const group = DEFAULT_GROUPS.find((g) => g.id === groupId)!;
-    rules = parseRules(group.patterns.join('\n'), `Built-in · ${group.label}`).rules;
+    // Plain patterns, so no need to parse them as rule-file text.
+    rules = group.patterns.map((pattern) => compileRule(pattern, false, `Built-in · ${group.label}`));
     builtinCache.set(groupId, rules);
   }
   return rules;
