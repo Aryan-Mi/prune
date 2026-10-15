@@ -7,6 +7,7 @@
  *   bun scripts/build.ts --package          # also zip into dist/*.zip
  *   bun scripts/build.ts --readable         # don't minify the content scripts
  */
+import { readFileSync } from 'node:fs';
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as esbuild from 'esbuild';
@@ -128,6 +129,33 @@ const minifyCssTemplates: esbuild.Plugin = {
   },
 };
 
+/**
+ * Private class members of the content scripts that minifying may rename to a
+ * letter or two (esbuild's `mangleProps`; ~7% less script). Only names that are
+ * declared `private` and always used as `this.<name>`, and that appear nowhere
+ * outside src/content, so nothing else can depend on them: not the DOM (which
+ * these classes don't extend), not other bundles (popup, background, the
+ * content script's chunks, which only call public members) and not messages.
+ * Anything else that mentions the name, even a comment, keeps it as is.
+ */
+function privateMembers(): RegExp | undefined {
+  const read = (pattern: string) =>
+    [...new Bun.Glob(pattern).scanSync(root)].map((file) => readFileSync(join(root, file), 'utf8'));
+  const content = read('src/content/**/*.ts');
+  const elsewhere = read('src/{shared,background,popup,options}/**/*.ts').join('\n');
+  const declared = new Set(content.flatMap((src) => [...src.matchAll(/^\s+private (?:readonly )?(?:get )?(\w+)/gm)].map((m) => m[1]!)));
+  const names = [...declared].filter(
+    (name) =>
+      !new RegExp(`\\b${name}\\b`).test(elsewhere) &&
+      content.every((src) =>
+        [...src.matchAll(new RegExp(`(?<![\\w$])${name}(?![\\w$])`, 'g'))].every((m) =>
+          /(?:this\.|private (?:readonly )?(?:get )?)$/.test(src.slice(Math.max(0, m.index - 30), m.index)),
+        ),
+      ),
+  );
+  return names.length ? new RegExp(`^(?:${names.join('|')})$`) : undefined;
+}
+
 function esbuildOptions(target: Target): esbuild.BuildOptions[] {
   const common: esbuild.BuildOptions = {
     outdir: join(root, 'dist', target),
@@ -144,6 +172,7 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     ...common,
     minify: !readable,
     plugins: readable ? [] : [minifyCssTemplates],
+    mangleProps: readable ? undefined : privateMembers(),
   };
   return [
     // Loaded into github.com tabs, so they are minified (~40% smaller source
