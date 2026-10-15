@@ -189,7 +189,8 @@ class Controller implements UiActions {
     }
     const subtrees = this.counts.places();
     // Collapse mode clicks each pruned file's toggle once its diff shows up.
-    const list = this.collapser?.waiting ? this.regions.diffList() : null;
+    // So does a revealed diff, to be marked again.
+    const list = this.collapser?.waiting || this.styles.waiting ? this.regions.diffList() : null;
     if (list) subtrees.push(list);
     const seen = new Set<Node>(subtrees);
     const climb = (node: Node) => {
@@ -203,7 +204,8 @@ class Controller implements UiActions {
       climb(el);
     }
     // The section's parent is the diff list: its own children are watched too, so the section stays last.
-    for (const node of [...this.counts.patched(), this.indicator?.host, this.section?.host]) {
+    // Revealed diffs too: GitHub re-rendering one replaces it without PRune's mark.
+    for (const node of [...this.counts.patched(), ...this.styles.shownElements(), this.indicator?.host, this.section?.host]) {
       if (node?.isConnected) climb(node);
     }
   }

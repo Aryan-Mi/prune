@@ -75,6 +75,8 @@ export class PruneStyles {
   private shown: string[] = [];
   /** Elements marked as shown. */
   private marked: Element[] = [];
+  /** Whether a revealed file's diff is not in the page, so the diff list must be watched for it. */
+  waiting = false;
   /** Set while leaving the diffs for another tab of the PR (see leave()). */
   private leaveTimer = 0;
 
@@ -121,8 +123,11 @@ export class PruneStyles {
     if (!this.el.isConnected) (document.head ?? document.documentElement).append(this.el);
     const root = document.documentElement;
     if (GATED && !root.hasAttribute(ON_ATTR)) root.setAttribute(ON_ATTR, '');
+    this.waiting = false;
     for (let i = 0; i < this.shown.length; i++) {
       const el = document.getElementById(this.shown[i]!);
+      // A revealed diff GitHub hasn't rendered (yet): it is marked when it shows up.
+      if (!el && i % 3 === 0) this.waiting = true;
       if (!el || el.hasAttribute(SHOW_ATTR) || (i % 3 === 2 && el.getAttribute('role') !== 'treeitem')) continue;
       el.setAttribute(SHOW_ATTR, '');
       // Drop the ones GitHub has re-rendered meanwhile.
@@ -131,8 +136,14 @@ export class PruneStyles {
     }
   }
 
+  /** The elements marked as shown, so their replacement by GitHub can be watched for. */
+  shownElements(): readonly Element[] {
+    return this.marked;
+  }
+
   /** Stops applying the rules, keeping them for when they apply again (same PR). */
   off(): void {
+    this.waiting = false;
     this.stopLeaving();
     if (!this.on) return;
     this.on = false;
