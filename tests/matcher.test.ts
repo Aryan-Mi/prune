@@ -87,6 +87,26 @@ describe('gitignore semantics', () => {
     const m = matcher('*.snap\n*.lock\n*.min.js');
     expect(m.match('x.lock')?.pattern).toBe('*.lock');
   });
+
+  test('reports the right rule for every kind of pattern', () => {
+    const m = matcher('dist/\n*.lock\nsrc/gen/**\n*.g.[ch]s\nvendor\nfoo?.txt\n/root.txt');
+    expect(m.match('a/dist/x.js')?.pattern).toBe('dist/');
+    expect(m.match('dist/yarn.lock')?.pattern).toBe('*.lock');
+    expect(m.match('src/gen/a/b.ts')?.pattern).toBe('src/gen/**');
+    expect(m.match('lib/model.g.cs')?.pattern).toBe('*.g.[ch]s');
+    expect(m.match('vendor/dist/x.js')?.pattern).toBe('vendor');
+    expect(m.match('a/foo1.txt')?.pattern).toBe('foo?.txt');
+    expect(m.match('root.txt')?.pattern).toBe('/root.txt');
+    expect(m.match('a/root.txt')).toBeNull();
+    // A directory pattern does not match a file of the same name.
+    expect(m.match('a/dist')).toBeNull();
+  });
+
+  test('invalid patterns are reported, not thrown', () => {
+    const { rules, errors } = parseRules('ok.txt\n[z-a].txt', 't');
+    expect(rules.map((r) => r.pattern)).toEqual(['ok.txt']);
+    expect(errors.map((e) => e.line)).toEqual([2]);
+  });
 });
 
 describe('built-in defaults', () => {

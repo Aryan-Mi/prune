@@ -17,8 +17,6 @@ export interface Rule {
   negated: boolean;
   /** Human readable origin, e.g. "Built-in · Lockfiles" or "Repo .pruneignore". */
   source: string;
-  /** Full-path regex; always correct, used to pinpoint which rule matched. */
-  re: RegExp;
   glob: CompiledGlob;
 }
 
@@ -144,15 +142,6 @@ export function compileGlob(raw: string): CompiledGlob {
   return { kind: 'path', source: `^${out}${dirOnly ? '/.*$' : '(?:/.*)?$'}`, literal: null, suffix: null };
 }
 
-/** Full-path regex source equivalent to `compileGlob(raw)`. */
-export function globToRegexSource(raw: string): string {
-  const glob = compileGlob(raw);
-  if (glob.kind === 'path') return glob.source;
-  const inner = glob.source.slice(1, -1);
-  return `^(?:.*/)?${inner}${glob.kind === 'dir' ? '/.*$' : '(?:/.*)?$'}`;
-}
-
-
 function findClassEnd(pattern: string, start: number): number {
   let j = start + 1;
   if (pattern[j] === '!' || pattern[j] === '^') j++;
@@ -191,7 +180,10 @@ export function parseRules(text: string, source: string): ParseResult {
     if (line === '') continue;
     try {
       const glob = compileGlob(line);
-      rules.push({ pattern: line, negated, source, glob, re: new RegExp(globToRegexSource(line)) });
+      // Validates the pattern (e.g. `[z-a]` throws). Not kept: compiled regexes
+      // are large, and most rules never need one (see matchesGlob).
+      new RegExp(glob.source);
+      rules.push({ pattern: line, negated, source, glob });
     } catch (err) {
       errors.push({ line: idx + 1, text: lines[idx]!, message: (err as Error).message, source });
     }
@@ -259,6 +251,39 @@ class ComponentTest {
   }
 }
 
+/** Per-rule regexes for `matchesGlob`, compiled on first use. */
+const globRegexes = new WeakMap<CompiledGlob, RegExp>();
+
+function globRegex(glob: CompiledGlob): RegExp {
+  let re = globRegexes.get(glob);
+  if (!re) {
+    re = new RegExp(glob.source);
+    globRegexes.set(glob, re);
+  }
+  return re;
+}
+
+/**
+ * Tests a single rule the way its segment does, used to pinpoint which rule
+ * matched. Exact names and `*suffix` patterns need no regex at all.
+ */
+function matchesGlob(glob: CompiledGlob, path: string, parts: readonly string[]): boolean {
+  if (glob.kind === 'path') return globRegex(glob).test(path);
+  // A directory pattern never matches the last component (the file name).
+  const end = glob.kind === 'dir' ? parts.length - 1 : parts.length;
+  for (let i = 0; i < end; i++) {
+    const part = parts[i]!;
+    if (glob.literal !== null) {
+      if (part === glob.literal) return true;
+    } else if (glob.suffix !== null) {
+      if (part.endsWith(glob.suffix)) return true;
+    } else if (globRegex(glob).test(part)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Evaluates an ordered rule list with last-match-wins semantics. Consecutive
  * rules with the same polarity are merged into one segment, so the common
@@ -282,8 +307,7 @@ export class Matcher {
   }
 
   /** The last segment that matches `path`, if any. */
-  private find(path: string): Segment | null {
-    const parts = path.split('/');
+  private find(path: string, parts: readonly string[]): Segment | null {
     for (let s = this.segments.length - 1; s >= 0; s--) {
       if (this.segments[s]!.test(path, parts)) return this.segments[s]!;
     }
@@ -292,16 +316,17 @@ export class Matcher {
 
   /** Returns the rule that prunes `path`, or null if the path is kept. */
   match(path: string): Rule | null {
-    const segment = this.find(path);
+    const parts = path.split('/');
+    const segment = this.find(path, parts);
     if (!segment || segment.negated) return null;
     for (let r = segment.rules.length - 1; r >= 0; r--) {
-      if (segment.rules[r]!.re.test(path)) return segment.rules[r]!;
+      if (matchesGlob(segment.rules[r]!.glob, path, parts)) return segment.rules[r]!;
     }
     return segment.rules[segment.rules.length - 1]!;
   }
 
   /** True when a negation rule explicitly keeps this path. */
   isExplicitlyKept(path: string): boolean {
-    return this.find(path)?.negated ?? false;
+    return this.find(path, path.split('/'))?.negated ?? false;
   }
 }
