@@ -5,7 +5,7 @@
  *   bun scripts/build.ts --target=firefox   # one target
  *   bun scripts/build.ts --watch            # rebuild on change
  *   bun scripts/build.ts --package          # also zip into dist/*.zip
- *   bun scripts/build.ts --readable         # don't minify content.js
+ *   bun scripts/build.ts --readable         # don't minify the content scripts
  */
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,6 +28,9 @@ const root = join(import.meta.dir, '..');
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
 
+/** PR pages (see PR_PATH in src/content/route.ts); they get content.js right away. */
+const PR_MATCH = 'https://github.com/*/*/pull/*';
+
 function manifest(target: Target) {
   const icons = Object.fromEntries(ICON_SIZES.map((s) => [s, `icons/icon-${s}.png`]));
   return {
@@ -41,11 +44,29 @@ function manifest(target: Target) {
     permissions: ['storage'],
     // Only requested at runtime, for the optional remote rules file URL.
     optional_host_permissions: ['https://*/*'],
+    // Everywhere else on GitHub only a tiny loader runs, which imports
+    // content.js if the tab soft-navigates to a PR.
     content_scripts: [
       {
         matches: ['https://github.com/*'],
+        exclude_matches: [PR_MATCH],
+        js: ['loader.js'],
+        run_at: 'document_start',
+      },
+      {
+        matches: [PR_MATCH],
         js: ['content.js'],
         run_at: 'document_start',
+      },
+    ],
+    // For the loader's import(). Chromium serves it from a per-session random
+    // URL only, so pages can't probe for the extension; Firefox's
+    // moz-extension:// URLs are random per install anyway.
+    web_accessible_resources: [
+      {
+        resources: ['content.js'],
+        matches: ['https://github.com/*'],
+        ...(target === 'chrome' ? { use_dynamic_url: true } : {}),
       },
     ],
     background: target === 'firefox' ? { scripts: ['background.js'] } : { service_worker: 'background.js' },
@@ -83,10 +104,16 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     logLevel: 'warning',
   };
   return [
-    // Loaded into every github.com tab, so it is minified (~40% smaller
-    // source to keep in memory and parse). Rebuild unminified with
-    // --readable to debug it.
+    // Loaded into github.com tabs, so they are minified (~40% smaller source
+    // to keep in memory and parse). Rebuild unminified with --readable to
+    // debug them.
     { ...common, entryPoints: { content: join(root, 'src/content/index.ts') }, minify: !readable },
+    {
+      ...common,
+      entryPoints: { loader: join(root, 'src/content/loader.ts') },
+      minify: !readable,
+      define: target === 'chrome' ? { browser: 'chrome' } : {},
+    },
     // Readable output: easier to debug and to get through store review.
     {
       ...common,
