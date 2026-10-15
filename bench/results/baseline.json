@@ -1,0 +1,178 @@
+{
+  "huge PR · conversation": {
+    "samples": [
+      {
+        "totalMs": 18.6,
+        "maxTaskMs": 14.092,
+        "tasks": 10,
+        "heapKb": 781.47265625
+      },
+      {
+        "totalMs": 27.593999999999998,
+        "maxTaskMs": 13.324,
+        "tasks": 11,
+        "heapKb": 939.64453125
+      },
+      {
+        "totalMs": 26.791000000000004,
+        "maxTaskMs": 21.387,
+        "tasks": 12,
+        "heapKb": 996.98828125
+      },
+      {
+        "totalMs": 30.571,
+        "maxTaskMs": 25.001,
+        "tasks": 11,
+        "heapKb": 1332.4453125
+      },
+      {
+        "totalMs": 25.825000000000003,
+        "maxTaskMs": 18.263,
+        "tasks": 14,
+        "heapKb": 1309.99609375
+      }
+    ],
+    "median": {
+      "totalMs": 26.791000000000004,
+      "maxTaskMs": 18.263,
+      "heapKb": 996.98828125
+    },
+    "worst": {
+      "totalMs": 30.571,
+      "maxTaskMs": 25.001,
+      "heapKb": 1332.4453125
+    }
+  },
+  "huge PR · files": {
+    "samples": [
+      {
+        "totalMs": 70.20800000000001,
+        "maxTaskMs": 16.262,
+        "tasks": 18,
+        "heapKb": 1037.859375
+      },
+      {
+        "totalMs": 81.991,
+        "maxTaskMs": 12.963,
+        "tasks": 20,
+        "heapKb": 1042.51953125
+      },
+      {
+        "totalMs": 142.639,
+        "maxTaskMs": 24.667,
+        "tasks": 21,
+        "heapKb": 846.0546875
+      },
+      {
+        "totalMs": 187.13299999999998,
+        "maxTaskMs": 22.289,
+        "tasks": 23,
+        "heapKb": 1080.75390625
+      },
+      {
+        "totalMs": 251.529,
+        "maxTaskMs": 25.168,
+        "tasks": 27,
+        "heapKb": 1069.14453125
+      }
+    ],
+    "median": {
+      "totalMs": 142.639,
+      "maxTaskMs": 22.289,
+      "heapKb": 1042.51953125
+    },
+    "worst": {
+      "totalMs": 251.529,
+      "maxTaskMs": 25.168,
+      "heapKb": 1080.75390625
+    }
+  },
+  "small PR · conversation": {
+    "samples": [
+      {
+        "totalMs": 11.938,
+        "maxTaskMs": 4.538,
+        "tasks": 15,
+        "heapKb": 335.82421875
+      },
+      {
+        "totalMs": 10.533000000000001,
+        "maxTaskMs": 4.81,
+        "tasks": 10,
+        "heapKb": 326.37890625
+      },
+      {
+        "totalMs": 10.562999999999995,
+        "maxTaskMs": 3.242,
+        "tasks": 11,
+        "heapKb": 326.64453125
+      },
+      {
+        "totalMs": 10.904,
+        "maxTaskMs": 4.859,
+        "tasks": 13,
+        "heapKb": 331.30859375
+      },
+      {
+        "totalMs": 11.347999999999999,
+        "maxTaskMs": 4.718,
+        "tasks": 11,
+        "heapKb": 319.1875
+      }
+    ],
+    "median": {
+      "totalMs": 10.904,
+      "maxTaskMs": 4.718,
+      "heapKb": 326.64453125
+    },
+    "worst": {
+      "totalMs": 11.938,
+      "maxTaskMs": 4.859,
+      "heapKb": 335.82421875
+    }
+  },
+  "small PR · files": {
+    "samples": [
+      {
+        "totalMs": 9.332999999999998,
+        "maxTaskMs": 6.664,
+        "tasks": 5,
+        "heapKb": 319.19140625
+      },
+      {
+        "totalMs": 7.542000000000001,
+        "maxTaskMs": 4.525,
+        "tasks": 8,
+        "heapKb": 325.99609375
+      },
+      {
+        "totalMs": 9.397999999999998,
+        "maxTaskMs": 4.387,
+        "tasks": 6,
+        "heapKb": 332.42578125
+      },
+      {
+        "totalMs": 10.805000000000001,
+        "maxTaskMs": 4.469,
+        "tasks": 9,
+        "heapKb": 344.96484375
+      },
+      {
+        "totalMs": 8.357999999999999,
+        "maxTaskMs": 4.865,
+        "tasks": 8,
+        "heapKb": 324.98828125
+      }
+    ],
+    "median": {
+      "totalMs": 9.332999999999998,
+      "maxTaskMs": 4.525,
+      "heapKb": 325.99609375
+    },
+    "worst": {
+      "totalMs": 10.805000000000001,
+      "maxTaskMs": 6.664,
+      "heapKb": 344.96484375
+    }
+  }
+}

@@ -2,7 +2,7 @@
   "name": "prune",
   "version": "0.1.0",
   "private": true,
-  "description": "Prune generated files (lockfiles, snapshots, build output…) out of GitHub pull request diffs and line counts.",
+  "description": "Prune generated files (lockfiles, snapshots, build output\u2026) out of GitHub pull request diffs and line counts.",
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.3.13",
@@ -17,7 +17,8 @@
     "test:e2e": "bun run build:chrome && node e2e/run.ts",
     "lint:firefox": "web-ext lint --source-dir dist/firefox",
     "package": "bun scripts/build.ts --package",
-    "check": "bun run typecheck && bun run test && bun run build && bun run lint:firefox"
+    "check": "bun run typecheck && bun run test && bun run build && bun run lint:firefox",
+    "bench": "bun run build:chrome && node bench/live.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
