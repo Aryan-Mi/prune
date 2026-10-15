@@ -77,7 +77,7 @@ async function load() {
   // The background script's work; the reply arrives as a copy.
   const result = structuredClone(prunePr(fileTree, {}, settings, {}));
   // The stylesheet is built but, like in the content script, not kept.
-  const cssLength = buildCss(result, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() }).length;
+  const cssLength = buildCss(result, { diffMode: 'hide', treeMode: 'hide', gated: true }).length;
   return { result, cssLength };
 }
 

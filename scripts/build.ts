@@ -173,6 +173,11 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     minify: !readable,
     plugins: readable ? [] : [minifyCssTemplates],
     mangleProps: readable ? undefined : privateMembers(),
+    define: {
+      // Chromium and Firefox restyle differently when stylesheets and attributes change (dom/styles.ts).
+      PRUNE_ENGINE: target === 'chrome' ? '"blink"' : '"gecko"',
+      ...(target === 'chrome' ? { browser: 'chrome' } : {}),
+    },
   };
   return [
     // Loaded into github.com tabs, so they are minified (~40% smaller source
@@ -181,7 +186,6 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     {
       ...contentScript,
       entryPoints: { content: join(root, 'src/content/index.ts') },
-      define: target === 'chrome' ? { browser: 'chrome' } : {},
     },
     {
       ...contentScript,

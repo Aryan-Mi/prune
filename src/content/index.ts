@@ -495,7 +495,8 @@ class Controller implements UiActions {
         this.collapser?.restore();
       }
     } else {
-      this.styles.clear();
+      // Switched off (or refreshing): the same rules may apply again in a moment.
+      this.styles.off();
       this.counts.restore();
       this.collapser?.restore();
     }

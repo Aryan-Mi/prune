@@ -59,6 +59,6 @@ const files = time('parseFileTree', () => parseFileTree(text));
 const compiled = time('compileRules', () => compileRules(settings));
 const result = time('computePrune', () => computePrune(files, {}, compiled, settings));
 const css = time('buildCss', () =>
-  buildCss(result, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() }),
+  buildCss(result, { diffMode: 'hide', treeMode: 'hide', gated: true }),
 );
 console.log(`\n${files.length} files, ${result.pruned.length} pruned, css ${(css.length / 1024).toFixed(0)} KB`);

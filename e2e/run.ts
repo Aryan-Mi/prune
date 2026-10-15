@@ -268,7 +268,32 @@ try {
   await section.locator('.item .btn').first().click();
   await page.waitForTimeout(300);
   check('"Show diff" reveals the file in place', await lockDiff.isVisible());
+  check(
+    'its file tree row is back too',
+    await page.locator(`#file-tree-item-diff-${lock.pathDigest}`).isVisible(),
+  );
   await page.screenshot({ path: join(outDir, 'files-revealed.png') });
+  // GitHub re-rendering the diff (a new element, without PRune's mark) keeps it revealed.
+  await page.evaluate((id) => {
+    const diff = document.getElementById(id)!;
+    const copy = diff.cloneNode(true) as Element;
+    copy.removeAttribute('data-prune-show');
+    diff.replaceWith(copy);
+  }, `diff-${lock.pathDigest}`);
+  await page.waitForTimeout(500);
+  check('a re-rendered revealed diff stays revealed', await lockDiff.isVisible());
+  await section.locator('.item .btn').first().click();
+  await page.waitForTimeout(300);
+  check('"Hide diff" hides it again', !(await lockDiff.isVisible()));
+  // The per-PR switch on this tab.
+  await pill.hover();
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.waitForTimeout(300);
+  check('switching off on the files tab shows the diff', await lockDiff.isVisible());
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.waitForTimeout(300);
+  check('switching on hides it again', !(await lockDiff.isVisible()));
+  await page.mouse.move(10, 900);
 
   // More content after the diffs (GitHub rendering more of them) → the section moves back to the end, before the next paint.
   const sectionLast = await page.evaluate(async () => {

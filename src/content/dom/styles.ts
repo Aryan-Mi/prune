@@ -14,9 +14,33 @@ import type { PruneResult } from '../../shared/prune.ts';
  *                                         left out on a page known to be classic)
  *
  * Id selectors, not [id="…"], so the style engine can look rules up by id.
+ *
+ * The sheet is written once per PR and settings, never for a click: in
+ * Chromium, any change to a document's stylesheets restyles the whole
+ * document (~1 s on a 3,000-file diff), while an attribute change only
+ * restyles the elements it affects. So a file shown again from the "Pruned
+ * files" section gets a `data-prune-show` attribute (its rules end in
+ * `:not([data-prune-show])`), and in Chromium every rule starts with
+ * `html[data-prune-on]`, an attribute that switches them all off and on
+ * (the per-PR switch, the conversation tab). Firefox restyles only elements
+ * with the ids and classes in a changed sheet, but an ancestor selector like
+ * `html[…]` would make it restyle everything, both when the sheet changes and
+ * when the attribute does (past 150 selectors). There the rules start at the
+ * id and the sheet is taken out instead.
  */
 
+declare const PRUNE_ENGINE: 'blink' | 'gecko' | undefined;
+
+/** Chromium: switch the rules with an attribute on <html> (scripts/build.ts sets the engine; tests get Blink's). */
+export const GATED = (typeof PRUNE_ENGINE === 'string' ? PRUNE_ENGINE : 'blink') === 'blink';
+
 const STYLE_ID = 'prune-style';
+/** On <html> while the rules apply (Chromium). */
+const ON_ATTR = 'data-prune-on';
+/** On diffs and tree rows of files shown again. */
+const SHOW_ATTR = 'data-prune-show';
+/** Longest wait for GitHub to take a tab's diffs away before the rules stop applying anyway. */
+const LEAVE_MS = 3000;
 
 export interface StyleOptions {
   diffMode: DiffMode;
@@ -40,56 +64,146 @@ export class PruneStyles {
     result: PruneResult;
     diffMode: DiffMode;
     treeMode: TreeMode;
-    revealed: string;
     classic: boolean;
   } | null = null;
-  private active = false;
+  /** Whether the rules apply. */
+  private on = false;
+  /**
+   * Ids of the revealed files' diffs and tree rows, marked again when GitHub
+   * re-renders them. Paths (new UI tree rows) only mark tree items.
+   */
+  private shown: string[] = [];
+  /** Elements marked as shown. */
+  private marked: Element[] = [];
+  /** Set while leaving the diffs for another tab of the PR (see leave()). */
+  private leaveTimer = 0;
 
+  /** Applies the rules for `result`; null when the page has no diffs (another tab of the PR). */
   update(result: PruneResult | null, options: StyleOptions): void {
-    if (!result || result.pruned.length === 0) {
-      this.clear();
+    if (!result) {
+      this.leave();
       return;
     }
+    if (result.pruned.length === 0) {
+      this.off();
+      return;
+    }
+    this.stopLeaving();
     const { diffMode, treeMode } = options;
-    const revealed = [...options.revealed].join();
     const built = this.built;
+    // A PR's data is refetched now and then: the same files need no new sheet.
+    const same = !!built && (built.result === result || sameFiles(built.result, result));
     // A sheet built for both UIs still does once the page turns out to be classic.
-    const classic = isClassicUi() && (built?.result !== result || built.classic);
-    if (
-      built?.result !== result ||
-      built.diffMode !== diffMode ||
-      built.treeMode !== treeMode ||
-      built.revealed !== revealed ||
-      built.classic !== classic
-    ) {
-      this.built = { result, diffMode, treeMode, revealed, classic };
-      const css = buildCss(result, { ...options, classic });
-      this.active = css !== '';
-      if (!this.active) {
-        this.el?.remove();
-        return;
-      }
+    const classic = isClassicUi() && (!same || built!.classic);
+    if (!same || built!.diffMode !== diffMode || built!.treeMode !== treeMode || built!.classic !== classic) {
       if (!this.el) {
         this.el = document.createElement('style');
         this.el.id = STYLE_ID;
       }
-      this.el.textContent = css;
+      this.el.textContent = buildCss(result, { ...options, classic, gated: GATED });
     }
+    this.built = { result, diffMode, treeMode, classic };
+    this.reveal(result, options.revealed);
+    this.on = true;
     this.ensure();
   }
 
-  /** Re-attaches the stylesheet if a full-page navigation swapped <head>. */
+  /**
+   * Re-attaches the stylesheet if a full-page navigation swapped <head>, and
+   * re-marks revealed files GitHub has rendered again. Cheap to call often.
+   */
   ensure(): void {
-    if (this.active && this.el && !this.el.isConnected) {
-      (document.head ?? document.documentElement).append(this.el);
+    if (!this.on || !this.el) return;
+    if (this.leaveTimer && !this.diffsShown()) {
+      this.off();
+      return;
+    }
+    if (!this.el.isConnected) (document.head ?? document.documentElement).append(this.el);
+    const root = document.documentElement;
+    if (GATED && !root.hasAttribute(ON_ATTR)) root.setAttribute(ON_ATTR, '');
+    for (let i = 0; i < this.shown.length; i++) {
+      const el = document.getElementById(this.shown[i]!);
+      if (!el || el.hasAttribute(SHOW_ATTR) || (i % 3 === 2 && el.getAttribute('role') !== 'treeitem')) continue;
+      el.setAttribute(SHOW_ATTR, '');
+      // Drop the ones GitHub has re-rendered meanwhile.
+      if (this.marked.length >= this.shown.length) this.marked = this.marked.filter((m) => m.isConnected);
+      this.marked.push(el);
     }
   }
 
-  clear(): void {
-    this.built = null;
-    this.active = false;
-    this.el?.remove();
+  /** Stops applying the rules, keeping them for when they apply again (same PR). */
+  off(): void {
+    this.stopLeaving();
+    if (!this.on) return;
+    this.on = false;
+    if (GATED) document.documentElement.removeAttribute(ON_ATTR);
+    else this.el?.remove();
   }
+
+  /** Stops applying the rules and forgets them (another PR, or none). */
+  clear(): void {
+    this.off();
+    this.built = null;
+    this.unmark(new Set());
+    this.shown = [];
+  }
+
+  /**
+   * Leaving the diffs for another tab of the PR: the rules stop applying once
+   * GitHub has taken the diffs away. Until then they're still there, and
+   * showing the pruned ones would only restyle (in a big PR, ~100k) elements
+   * that are about to go.
+   */
+  private leave(): void {
+    if (!this.on || this.leaveTimer) return;
+    if (!this.diffsShown()) {
+      this.off();
+      return;
+    }
+    this.leaveTimer = window.setTimeout(() => this.off(), LEAVE_MS);
+  }
+
+  private stopLeaving(): void {
+    clearTimeout(this.leaveTimer);
+    this.leaveTimer = 0;
+  }
+
+  /** Whether the page still has a pruned file's diff. */
+  private diffsShown(): boolean {
+    return !!this.built?.result.pruned.some((f) => document.getElementById(`diff-${f.digest}`));
+  }
+
+  private reveal(result: PruneResult, revealed: ReadonlySet<string>): void {
+    const ids: string[] = [];
+    if (revealed.size > 0) {
+      for (const file of result.pruned) {
+        // Three per file; ensure() relies on the path coming last.
+        if (revealed.has(file.digest)) ids.push(`diff-${file.digest}`, `file-tree-item-diff-${file.digest}`, file.path);
+      }
+    }
+    if (ids.length === this.shown.length && ids.every((id, i) => id === this.shown[i])) return;
+    this.shown = ids;
+    this.unmark(new Set(ids));
+  }
+
+  /** Unmarks the elements not in `keep` (or no longer in the page). */
+  private unmark(keep: ReadonlySet<string>): void {
+    this.marked = this.marked.filter((el) => {
+      if (el.isConnected && keep.has(el.id)) return true;
+      el.removeAttribute(SHOW_ATTR);
+      return false;
+    });
+  }
+}
+
+/** Whether two results prune the same files, so their sheets would be the same. */
+function sameFiles(a: PruneResult, b: PruneResult): boolean {
+  return (
+    a.pruned.length === b.pruned.length &&
+    a.prunedDirs.length === b.prunedDirs.length &&
+    a.pruned.every((f, i) => f.digest === b.pruned[i]!.digest && f.path === b.pruned[i]!.path) &&
+    a.prunedDirs.every((d, i) => d === b.prunedDirs[i])
+  );
 }
 
 /**
@@ -117,21 +231,23 @@ function idSelector(id: string): string {
   })}`;
 }
 
-export function buildCss(result: PruneResult, options: StyleOptions): string {
+export function buildCss(
+  result: PruneResult,
+  options: Omit<StyleOptions, 'revealed'> & { gated?: boolean },
+): string {
+  const gate = options.gated ? `html[${ON_ATTR}] ` : '';
+  const shown = `:not([${SHOW_ATTR}])`;
   const diffSelectors: string[] = [];
   const treeSelectors: string[] = [];
-  // Usually empty; then the digests aren't even hashed for the lookup.
-  const revealed = options.revealed.size > 0 ? options.revealed : null;
   const newUi = !options.classic;
   for (const file of result.pruned) {
-    if (revealed?.has(file.digest)) continue;
-    diffSelectors.push(`#diff-${file.digest}`);
-    treeSelectors.push(`#file-tree-item-diff-${file.digest}`);
-    if (newUi) treeSelectors.push(`li${idSelector(file.path)}[role="treeitem"]`);
+    diffSelectors.push(`${gate}#diff-${file.digest}${shown}`);
+    treeSelectors.push(`${gate}#file-tree-item-diff-${file.digest}${shown}`);
+    if (newUi) treeSelectors.push(`${gate}li${idSelector(file.path)}[role="treeitem"]${shown}`);
   }
   // Directories whose every file is pruned (new UI tree ids are paths).
   if (newUi) {
-    for (const dir of result.prunedDirs) treeSelectors.push(`li${idSelector(dir)}[role="treeitem"]`);
+    for (const dir of result.prunedDirs) treeSelectors.push(`${gate}li${idSelector(dir)}[role="treeitem"]`);
   }
 
   const rules: string[] = [];
