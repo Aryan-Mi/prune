@@ -85,7 +85,15 @@ function manifest(target: Target) {
             gecko_android: { strict_min_version: '142.0' },
           },
         }
-      : { minimum_chrome_version: '120' }),
+      : {
+          minimum_chrome_version: '120',
+          // Chrome 148+ passes messages as structured clones, as Firefox always
+          // has, instead of as JSON: sending a 3000-file PR's file list takes
+          // the page ~0.3 ms instead of ~1.2 ms. Older versions ignore the key
+          // (with a warning on chrome://extensions). Messages stay plain data
+          // that both serializations treat alike.
+          message_serialization: 'structured_clone',
+        }),
   };
 }
 
