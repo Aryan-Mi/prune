@@ -186,7 +186,8 @@ class Controller implements UiActions {
       const interval = complete ? RESCAN_INTERVAL_MS : INCOMPLETE_RESCAN_MS;
       const since = now - this.lastRescan;
       if (!intact || since >= interval) {
-        this.applyCounts(since >= interval);
+        // While incomplete, apply() searches the whole page only if the likely places come up short.
+        this.applyCounts(complete);
       } else if (!complete && fromMutation) {
         this.scheduleRetry(interval - since);
       }
@@ -216,6 +217,8 @@ class Controller implements UiActions {
       this.release();
       return;
     }
+    // Counters found where expected are enough at first; the whole-page search for more can wait.
+    this.lastRescan = performance.now();
     if (prev?.key !== pr.key) {
       this.teardown();
       this.sectionContainer = null;

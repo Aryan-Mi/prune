@@ -79,24 +79,30 @@ export class CountPatcher {
    * Already-patched nodes are left alone, so calling this repeatedly is cheap
    * and causes no DOM writes when nothing new appeared.
    *
-   * Unless `full`, only the part of the header where the last full search
-   * found the counters is searched (a few dozen elements), and the whole page
-   * only if something is missing there. The whole page is searched without
-   * `bulk` (see regions.ts), which is searched only if something is not found
-   * elsewhere. Returns whether the whole page was searched.
+   * Unless `full`, only the part of the header where the counters were found
+   * last time, or else where GitHub's ids say they are, is searched (a few
+   * dozen elements), and the whole page only if something is missing there.
+   * The whole page is searched without `bulk` (see regions.ts), which is
+   * searched only if something is not found elsewhere. Returns whether the
+   * whole page was searched.
    */
   apply(basePath: string, original: PrTotals, kept: PrTotals, bulk: () => readonly Element[], full = true): boolean {
     this.prune();
     const values = `${original.additions} ${original.deletions} ${original.files} ${kept.additions} ${kept.deletions} ${kept.files}`;
     if (values !== this.values) {
       // Patches outside the scope need the new numbers too.
+      if (this.texts.length > 0 || this.attrs.length > 0) full = true;
       this.values = values;
-      full = true;
     }
-    if (!full && this.scope?.isConnected) {
-      const scope = this.scope;
-      this.scan(basePath, original, kept, queryWithin(scope, DELETION_SELECTOR), queryWithin(scope, FILES_LINK_SELECTOR));
-      if (this.diffstatPatched && this.counterPatched) return false;
+    if (!full) {
+      for (const scope of [this.scope, landmarkScope()]) {
+        if (!scope?.isConnected) continue;
+        this.scan(basePath, original, kept, queryWithin(scope, DELETION_SELECTOR), queryWithin(scope, FILES_LINK_SELECTOR));
+        if (this.diffstatPatched && this.counterPatched) {
+          this.scope = scope;
+          return false;
+        }
+      }
     }
     const regions = bulk();
     const roots = outsideRoots(regions);
@@ -325,6 +331,19 @@ function findTabLinks(roots: readonly Element[]): Set<Element> {
     for (const link of nav.querySelectorAll(FILES_LINK_SELECTOR)) links.add(link);
   }
   return links;
+}
+
+/**
+ * The part of the PR header holding its counters, by the ids GitHub gives
+ * them: `#diffstat` and `#files_tab_counter` (classic UI), and the "Files
+ * changed" tab `#prs-files-anchor-tab` (React header, whose diffstat is next
+ * to the tabs). Free to look up; whatever it misses is searched for anyway.
+ */
+function landmarkScope(): Element | null {
+  const diffstat = document.getElementById('diffstat');
+  const link = document.getElementById('prs-files-anchor-tab') ?? document.getElementById('files_tab_counter');
+  if (diffstat && link) return commonAncestor([diffstat, link]);
+  return link?.closest('[data-component="PH_Navigation"]') ?? link?.closest('a') ?? diffstat;
 }
 
 /** `root` and its descendants that match `selector`, in document order. */
