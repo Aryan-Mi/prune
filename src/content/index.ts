@@ -67,7 +67,8 @@ class Controller implements UiActions {
   private readonly prCache = new Map<string, CacheEntry<Omit<PrData, 'repoConfig'>>>();
   private readonly repoCache = new Map<string, CacheEntry<RepoConfig>>();
   private readonly revealed = new Map<string, Set<string>>();
-  private readonly inactive = new Set<string>(readInactive());
+  /** PRs switched off in this tab; read from sessionStorage on first use (it costs ~1 ms). */
+  private inactiveKeys: Set<string> | null = null;
   private loadToken = 0;
 
   private readonly styles = new PruneStyles();
@@ -78,6 +79,7 @@ class Controller implements UiActions {
   private readonly section = new PrunedSection(this);
   private sectionContainer: Element | null = null;
 
+  private readonly observer = new MutationObserver(() => this.onMutation());
   private checkTimer = 0;
   private retryTimer = 0;
   private lastCheck = 0;
@@ -109,12 +111,10 @@ class Controller implements UiActions {
       return undefined;
     });
 
-    // One observer for the whole page; the callback only schedules a check, so
-    // its cost is constant no matter how many nodes GitHub adds.
-    new MutationObserver(() => this.scheduleCheck()).observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
+    // One observer for the whole page; the callback only schedules a check (and
+    // pauses itself until then), so its cost is constant no matter how many
+    // nodes GitHub adds.
+    this.observe();
     window.addEventListener('popstate', () => this.scheduleCheck());
     // Back/forward-cache restores bring back a frozen DOM without mutations.
     window.addEventListener('pageshow', (e) => {
@@ -133,8 +133,21 @@ class Controller implements UiActions {
 
   // ---- Scheduling -------------------------------------------------------
 
+  private observe(): void {
+    this.observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  private onMutation(): void {
+    // A navigation: handle it right away, before the new page is painted.
+    if (location.href !== this.href) this.check();
+    else this.scheduleCheck();
+  }
+
   private scheduleCheck(): void {
     if (this.checkTimer) return;
+    // Until the check runs, further mutations would change nothing, so don't
+    // have the browser record them (a big PR page makes thousands).
+    this.observer.disconnect();
     const wait = Math.max(0, CHECK_INTERVAL_MS - (performance.now() - this.lastCheck));
     this.checkTimer = window.setTimeout(() => {
       this.checkTimer = 0;
@@ -149,6 +162,7 @@ class Controller implements UiActions {
    */
   private check(fromMutation = true): void {
     this.lastCheck = performance.now();
+    this.observe();
     if (location.href !== this.href) {
       this.href = location.href;
       this.onLocationChange();
@@ -276,7 +290,11 @@ class Controller implements UiActions {
   }
 
   private isActive(): boolean {
-    return !!this.pr && !this.inactive.has(this.pr.key);
+    return !!this.pr && !this.inactive().has(this.pr.key);
+  }
+
+  private inactive(): Set<string> {
+    return (this.inactiveKeys ??= new Set(readInactive()));
   }
 
   private isPruning(): boolean {
@@ -411,9 +429,10 @@ class Controller implements UiActions {
 
   setActive(active: boolean): void {
     if (!this.pr) return;
-    if (active) this.inactive.delete(this.pr.key);
-    else this.inactive.add(this.pr.key);
-    writeInactive(this.inactive);
+    const inactive = this.inactive();
+    if (active) inactive.delete(this.pr.key);
+    else inactive.add(this.pr.key);
+    writeInactive(inactive);
     this.render();
   }
 
