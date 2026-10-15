@@ -1,4 +1,5 @@
 import type { PrTotals } from './filetree.ts';
+import type { Settings } from './settings.ts';
 
 /** A repository's `.pruneignore`, as found on its default branch. */
 export interface RepoConfig {
@@ -11,6 +12,10 @@ export type Message =
   | { type: 'refresh-remote'; force?: boolean }
   | { type: 'get-status' }
   | { type: 'set-active'; active: boolean }
+  /** Background → content scripts that opened a PR: settings or the remote rules changed. */
+  | { type: 'config-changed'; settings: Settings; remoteChanged: boolean }
+  /** Content → background: the PRs switched off in this tab. */
+  | { type: 'set-inactive'; keys: string[] }
   /**
    * Content → background, as soon as a PR page opens: what the background
    * already has for this PR (see background/cache.ts). Also wakes it up.
@@ -36,6 +41,9 @@ export type Message =
 
 /** Reply to `lookup`. */
 export interface Lookup {
+  settings: Settings;
+  /** PRs switched off in this tab. */
+  inactive: string[];
   /** ETag of the stored file list, to revalidate with. */
   etag: string | null;
   /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */

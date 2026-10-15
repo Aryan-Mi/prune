@@ -4,7 +4,14 @@ import type { Lookup, Message } from '../shared/messages.ts';
 import { parseRules } from '../shared/matcher.ts';
 import { computePrune, type PruneResult } from '../shared/prune.ts';
 import { compileRules } from '../shared/rules.ts';
-import { loadRemoteCache, loadSettings, REMOTE_KEY, REMOTE_TTL_MS, type RemoteCache } from '../shared/settings.ts';
+import {
+  loadRemoteCache,
+  loadSettings,
+  onConfigChanged,
+  REMOTE_KEY,
+  REMOTE_TTL_MS,
+  type RemoteCache,
+} from '../shared/settings.ts';
 import {
   cachePartition,
   loadFileList,
@@ -13,6 +20,7 @@ import {
   storedEtag,
   storedRepoConfig,
 } from './cache.ts';
+import { notifyTabs, openTab, setInactive } from './tabs.ts';
 
 /** Rules files larger than this are rejected; real ones are a few KB. */
 const MAX_REMOTE_BYTES = 512 * 1024;
@@ -68,15 +76,20 @@ function refreshOnce(force = false): Promise<RemoteCache | null> {
   return inflight;
 }
 
-/** What's stored for a PR page that just opened, so the content script can skip fetching it. */
-async function lookup(msg: Extract<Message, { type: 'lookup' }>, partition: string | null): Promise<Lookup> {
-  if (partition === null) return { etag: null, repo: null };
-  const [etag, repo, settings] = await Promise.all([
-    storedEtag(partition + msg.key),
-    storedRepoConfig(partition + msg.repoKey),
+/**
+ * Everything a PR page needs before GitHub has answered: settings, the tab's
+ * switched-off PRs, and what's stored for this PR so the content script can
+ * skip fetching or sending it.
+ */
+async function lookup(msg: Extract<Message, { type: 'lookup' }>, sender: browser.runtime.MessageSender): Promise<Lookup> {
+  const partition = cachePartition(sender);
+  const [inactive, settings, etag, repo] = await Promise.all([
+    openTab(sender.tab?.id),
     loadSettings(),
+    partition === null ? null : storedEtag(partition + msg.key),
+    partition === null ? null : storedRepoConfig(partition + msg.repoKey),
   ]);
-  return { etag, repo: settings.useRepoConfig ? repo : { path: null, text: null } };
+  return { settings, inactive, etag, repo: settings.useRepoConfig ? repo : { path: null, text: null } };
 }
 
 /**
@@ -116,14 +129,22 @@ ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: u
   let task: Promise<unknown> | undefined;
   if (msg.type === 'open-options') task = ext.runtime.openOptionsPage();
   else if (msg.type === 'refresh-remote') task = refreshOnce(msg.force);
-  else if (msg.type === 'lookup') task = lookup(msg, cachePartition(sender));
+  else if (msg.type === 'lookup') task = lookup(msg, sender);
   else if (msg.type === 'prune') task = prune(msg, cachePartition(sender));
+  else if (msg.type === 'set-inactive') task = setInactive(sender.tab?.id, msg.keys);
   if (!task) return undefined;
   task.then(
     (value) => sendResponse(value ?? null),
     (err: unknown) => sendResponse({ error: String(err) }),
   );
   return true;
+});
+
+// Content scripts don't read settings themselves (see tabs.ts).
+onConfigChanged((remoteChanged) => {
+  loadSettings()
+    .then((settings) => notifyTabs({ type: 'config-changed', settings, remoteChanged }))
+    .catch(() => {});
 });
 
 ext.runtime.onStartup.addListener(() => {

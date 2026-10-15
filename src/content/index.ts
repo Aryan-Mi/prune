@@ -2,7 +2,7 @@ import { ext } from '../shared/browser.ts';
 import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, onConfigChanged, rulesKey, type Settings } from '../shared/settings.ts';
+import { isRepoDisabled, loadSettings, rulesKey, type Settings } from '../shared/settings.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
@@ -20,7 +20,6 @@ const CHECK_INTERVAL_MS = 100;
 const RESCAN_INTERVAL_MS = 1000;
 /** Rescan gap while some header counter has not been found yet (page still rendering). */
 const INCOMPLETE_RESCAN_MS = 250;
-const INACTIVE_KEY = 'prune:inactive';
 
 interface PrData {
   /** The PR this data belongs to. */
@@ -61,8 +60,8 @@ class Controller implements UiActions {
   /** Responses fetched while settings were still loading. */
   private prefetched: { key: string; promise: Promise<PrResponses> } | null = null;
   private readonly revealed = new Map<string, Set<string>>();
-  /** PRs switched off in this tab; read from sessionStorage on first use (it costs ~1 ms). */
-  private inactiveKeys: Set<string> | null = null;
+  /** PRs switched off in this tab; the background script keeps them across page loads. */
+  private readonly inactive = new Set<string>();
   private loadToken = 0;
 
   private readonly styles = new PruneStyles();
@@ -88,6 +87,9 @@ class Controller implements UiActions {
       } else if (msg.type === 'set-active') {
         this.setActive(msg.active);
         sendResponse(this.tabStatus());
+      } else if (msg.type === 'config-changed') {
+        this.onConfigChanged(msg.settings, msg.remoteChanged);
+        sendResponse(null);
       }
       return undefined;
     });
@@ -113,29 +115,36 @@ class Controller implements UiActions {
     this.check();
   }
 
-  /** Loads settings once, then handles the current page again. */
-  private configure(): void {
+  /**
+   * Takes the settings from the background script's reply to the first PR
+   * page's `lookup`, then handles the current page again. Changes are pushed
+   * from there too, so this script never reads extension storage.
+   */
+  private configure(lookup: Promise<Lookup>): void {
     if (this.configuring) return;
     this.configuring = true;
-    loadSettings()
-      .then((settings) => {
+    lookup
+      .then(({ settings, inactive }) => {
         this.settings = settings;
+        for (const key of inactive) this.inactive.add(key);
         this.configured = true;
-        onConfigChanged(async (remoteChanged) => {
-          const rules = rulesKey(this.settings);
-          this.settings = await loadSettings();
-          if (remoteChanged || rulesKey(this.settings) !== rules) {
-            // Results are only kept for the pruned files, so prune again from scratch.
-            this.prCache.clear();
-            if (this.pr) this.load(this.pr);
-            return;
-          }
-          this.render();
-        });
         this.href = '';
         this.check();
       })
       .catch((err: unknown) => console.error('[PRune]', err));
+  }
+
+  private onConfigChanged(settings: Settings, remoteChanged: boolean): void {
+    if (!this.configured) return;
+    const rules = rulesKey(this.settings);
+    this.settings = settings;
+    if (remoteChanged || rulesKey(settings) !== rules) {
+      // Results are only kept for the pruned files, so prune again from scratch.
+      this.prCache.clear();
+      if (this.pr) this.load(this.pr);
+      return;
+    }
+    this.render();
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -204,9 +213,10 @@ class Controller implements UiActions {
     const pr = parsePrUrl(location.pathname);
     if (pr && !this.configured) {
       // GitHub's responses don't depend on settings: fetch them while they load.
-      this.prefetched = { key: pr.key, promise: this.fetchPr(pr) };
+      const lookup = this.lookup(pr);
+      this.prefetched = { key: pr.key, promise: this.fetchPr(pr, lookup) };
       this.prefetched.promise.catch(() => {});
-      this.configure();
+      this.configure(lookup);
       return;
     }
     const prev = this.pr;
@@ -289,12 +299,21 @@ class Controller implements UiActions {
     return entry.promise;
   }
 
-  /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
-  private fetchPr(pr: PrRef): Promise<PrResponses> {
-    // Also wakes up a Chromium service worker while GitHub responds.
-    const lookup = sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
-      (): Lookup => ({ etag: null, repo: null }),
+  /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
+  private lookup(pr: PrRef): Promise<Lookup> {
+    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
+      async (): Promise<Lookup> => ({
+        // Not reachable right now: fetch everything, and read settings here.
+        settings: this.configured ? this.settings : await loadSettings(),
+        inactive: [],
+        etag: null,
+        repo: null,
+      }),
     );
+  }
+
+  /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
+  private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
     return Promise.all([
       fetchFileTree(pr),
       fetchPrTotals(pr),
@@ -320,11 +339,7 @@ class Controller implements UiActions {
   }
 
   private isActive(): boolean {
-    return !!this.pr && !this.inactive().has(this.pr.key);
-  }
-
-  private inactive(): Set<string> {
-    return (this.inactiveKeys ??= new Set(readInactive()));
+    return !!this.pr && !this.inactive.has(this.pr.key);
   }
 
   private isPruning(): boolean {
@@ -474,10 +489,9 @@ class Controller implements UiActions {
 
   setActive(active: boolean): void {
     if (!this.pr) return;
-    const inactive = this.inactive();
-    if (active) inactive.delete(this.pr.key);
-    else inactive.add(this.pr.key);
-    writeInactive(inactive);
+    if (active) this.inactive.delete(this.pr.key);
+    else this.inactive.add(this.pr.key);
+    sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
   }
 
@@ -585,24 +599,6 @@ function filesTabPath(pr: PrRef): string {
     if (link.pathname === `${pr.basePath}/changes` || link.pathname === `${pr.basePath}/files`) return link.pathname;
   }
   return `${pr.basePath}/files`;
-}
-
-function readInactive(): string[] {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(INACTIVE_KEY) ?? '[]') as unknown;
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeInactive(keys: Set<string>): void {
-  try {
-    if (keys.size === 0) sessionStorage.removeItem(INACTIVE_KEY);
-    else sessionStorage.setItem(INACTIVE_KEY, JSON.stringify([...keys]));
-  } catch {
-    // Storage can be unavailable (e.g. blocked); the toggle then lasts until reload.
-  }
 }
 
 new Controller().start();

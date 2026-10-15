@@ -206,6 +206,37 @@ try {
     `got +${refetched.additions}`,
   );
 
+  // ---- Per-tab toggle and settings changes (kept and pushed by the background script) ----
+  const readUntil = async (want: number | null) => {
+    let h = await readHeader(page);
+    for (let i = 0; i < 50 && h.additions !== want; i++) {
+      await page.waitForTimeout(100);
+      h = await readHeader(page);
+    }
+    return h;
+  };
+  await pill.hover();
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.mouse.move(10, 900);
+  await page.waitForTimeout(300);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await pill.waitFor({ timeout: 20_000 });
+  const stillOff = await readUntil(total.additions);
+  check('switched off stays off on reload', stillOff.additions === total.additions, `got +${stillOff.additions}`);
+  await pill.hover();
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.mouse.move(10, 900);
+  const backOn = await readUntil(expected.additions);
+  check('switched back on', backOn.additions === expected.additions, `got +${backOn.additions}`);
+  const setSettings = (settings: object) =>
+    worker.evaluate((s) => (globalThis as unknown as Ext).chrome.storage.local.set({ settings: s }), settings);
+  await setSettings({ disabledGroups: ['lockfiles'] });
+  const unpruned = await readUntil(total.additions);
+  check('settings changes reach the page', unpruned.additions === total.additions, `got +${unpruned.additions}`);
+  await setSettings({});
+  const repruned = await readUntil(expected.additions);
+  check('…and back', repruned.additions === expected.additions, `got +${repruned.additions}`);
+
   // ---- Repo page → PR (soft navigation) ----------------------------------------
   // PRune does nothing PR-specific on other pages (no settings, no UI) until a
   // PR is opened in the same document.
