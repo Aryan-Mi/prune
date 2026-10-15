@@ -6,6 +6,7 @@ import { PrFileList } from '../src/shared/filetree.ts';
 const area = new Map<string, unknown>();
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const sent: [number, unknown][] = [];
+let onChanged: (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void = () => {};
 (globalThis as { browser?: unknown }).browser = {
   runtime: { getManifest: () => ({ version: '1.0.0' }) },
   tabs: {
@@ -15,6 +16,11 @@ const sent: [number, unknown][] = [];
     },
   },
   storage: {
+    onChanged: {
+      addListener(listener: typeof onChanged) {
+        onChanged = listener;
+      },
+    },
     session: {
       async get(key: string) {
         return area.has(key) ? { [key]: copy(area.get(key)) } : {};
@@ -38,7 +44,7 @@ const { fetchesFor, fetchFileList } = await import('../src/background/fetch.ts')
 const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
 const { computePrune } = await import('../src/shared/prune.ts');
 const { compileRules } = await import('../src/shared/rules.ts');
-const { DEFAULT_SETTINGS } = await import('../src/shared/settings.ts');
+const { DEFAULT_SETTINGS, onConfigChanged } = await import('../src/shared/settings.ts');
 
 const list = (n: number) =>
   PrFileList.of(
@@ -148,4 +154,14 @@ test('tabs keep their switched-off PRs and get settings changes', async () => {
   await notifyTabs({ type: 'refresh-remote' });
   expect(sent.map(([id]) => id).sort()).toEqual([1, 2]);
   expect(Object.keys(area.get('tabs') as object).sort()).toEqual(['1', '2']);
+});
+
+test('settings changes tell whether files may be pruned differently', () => {
+  const calls: boolean[] = [];
+  onConfigChanged((rulesChanged) => calls.push(rulesChanged));
+  onChanged({ settings: { oldValue: { diffMode: 'hide' }, newValue: { diffMode: 'collapse' } } }, 'local');
+  onChanged({ settings: { newValue: { userPatterns: 'dist/' } } }, 'local');
+  onChanged({ remoteCache: { newValue: { url: 'https://example.com', text: '' } } }, 'local');
+  onChanged({ settings: { newValue: { userPatterns: 'dist/' } } }, 'session');
+  expect(calls).toEqual([false, true, true]);
 });
