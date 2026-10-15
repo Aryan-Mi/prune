@@ -21,7 +21,9 @@
  * From a heap snapshot (after the page settled, before the popover was opened):
  *   code KB   what V8 keeps for our scripts' functions: SharedFunctionInfos,
  *             bytecode, scope infos, constant pools (incl. the CSS strings),
- *             feedback; only objects nothing outside our scripts' code holds
+ *             feedback; only objects nothing outside our scripts' code holds.
+ *             "JIT" is the part that is optimized machine code: it depends on
+ *             how hot functions got by then, so it varies from run to run
  *   source KB our scripts' source text (held outside the JS heap)
  * And, after that:
  *   popover   ms from moving the pointer onto the ✂ pill until the popover is
@@ -78,6 +80,8 @@ interface Sample {
   lazyMs: number;
   runMs: number;
   codeKb: number;
+  /** Of codeKb, machine code from V8's optimizing tiers: depends on how hot functions got by snapshot time. */
+  jitKb: number;
   sourceKb: number;
   popoverMs: number;
   /** Per script: compile ms, code KB. */
@@ -240,6 +244,7 @@ function analyzeHeap(json: string, sample: Sample): void {
       if (!roots.has(n) && (inSet.get(n) ?? 0) < retainers[n]!) continue;
       counted.add(n);
       bytes += size(n);
+      if (/^system \/ (InstructionStream|Code|Deoptimization)/.test(name(n))) sample.jitKb += size(n) / 1024;
       const kind = `${type(n)} ${name(n).replace(/^system \/ (\w+).*/, '$1').slice(0, 40)}`;
       kinds.set(kind, (kinds.get(kind) ?? 0) + size(n));
     }
@@ -315,7 +320,7 @@ async function measure(scenario: Scenario): Promise<Sample> {
     viewport: { width: 1400, height: 1000 },
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
   });
-  const sample: Sample = { compileMs: 0, lazyMs: 0, runMs: 0, codeKb: 0, sourceKb: 0, popoverMs: 0, scripts: {} };
+  const sample: Sample = { compileMs: 0, lazyMs: 0, runMs: 0, codeKb: 0, jitKb: 0, sourceKb: 0, popoverMs: 0, scripts: {} };
   try {
     const page = context.pages()[0] ?? (await context.newPage());
     const cdp = await context.newCDPSession(page);
@@ -374,21 +379,21 @@ for (let r = 0; r < RUNS; r++) {
 }
 
 const fmt = (n: number) => n.toFixed(2).padStart(6);
-type Metric = 'compileMs' | 'lazyMs' | 'runMs' | 'codeKb' | 'sourceKb' | 'popoverMs';
-const metrics: Metric[] = ['compileMs', 'lazyMs', 'runMs', 'codeKb', 'sourceKb', 'popoverMs'];
+type Metric = 'compileMs' | 'lazyMs' | 'runMs' | 'codeKb' | 'jitKb' | 'sourceKb' | 'popoverMs';
+const metrics: Metric[] = ['compileMs', 'lazyMs', 'runMs', 'codeKb', 'jitKb', 'sourceKb', 'popoverMs'];
 console.log(`\n${RUNS} cold runs per scenario (median)\n`);
-console.log('scenario                    compile ms   lazy ms   run ms   code KB   source KB   popover ms');
+console.log('scenario                    compile ms   lazy ms   run ms   code KB  (of it JIT)   source KB   popover ms');
 const summary: Record<string, unknown> = {};
 for (const [name, samples] of Object.entries(results)) {
   const med = (pick: (s: Sample) => number) => samples.map(pick).sort((a, b) => a - b)[samples.length >> 1]!;
   const m = Object.fromEntries(metrics.map((k) => [k, med((s) => s[k])])) as Record<Metric, number>;
   console.log(
-    `${name.padEnd(26)}  ${fmt(m.compileMs)}      ${fmt(m.lazyMs)}   ${fmt(m.runMs)}   ${fmt(m.codeKb)}   ${fmt(m.sourceKb)}      ${String(Math.round(m.popoverMs)).padStart(6)}`,
+    `${name.padEnd(26)}  ${fmt(m.compileMs)}      ${fmt(m.lazyMs)}   ${fmt(m.runMs)}   ${fmt(m.codeKb)}    ${fmt(m.jitKb)}      ${fmt(m.sourceKb)}      ${String(Math.round(m.popoverMs)).padStart(6)}`,
   );
   const names = [...new Set(samples.flatMap((s) => Object.keys(s.scripts)))];
   for (const script of names) {
     const per = (k: 'compileMs' | 'codeKb' | 'sourceKb') => med((s) => s.scripts[script]?.[k] ?? 0);
-    console.log(`    ${script.padEnd(22)}  ${fmt(per('compileMs'))}                         ${fmt(per('codeKb'))}   ${fmt(per('sourceKb'))}`);
+    console.log(`    ${script.padEnd(22)}  ${fmt(per('compileMs'))}                         ${fmt(per('codeKb'))}                 ${fmt(per('sourceKb'))}`);
   }
   summary[name] = { median: m, samples };
 }
