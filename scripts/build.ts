@@ -5,6 +5,7 @@
  *   bun scripts/build.ts --target=firefox   # one target
  *   bun scripts/build.ts --watch            # rebuild on change
  *   bun scripts/build.ts --package          # also zip into dist/*.zip
+ *   bun scripts/build.ts --readable         # don't minify content.js
  */
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,6 +23,7 @@ const args = new Map(
 const targets: Target[] = args.has('target') ? [args.get('target') as Target] : ['firefox', 'chrome'];
 const watch = args.has('watch');
 const shouldPackage = args.has('package');
+const readable = args.has('readable');
 const root = join(import.meta.dir, '..');
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
@@ -68,28 +70,35 @@ function manifest(target: Target) {
   };
 }
 
-function esbuildOptions(target: Target): esbuild.BuildOptions {
-  return {
-    entryPoints: {
-      content: join(root, 'src/content/index.ts'),
-      background: join(root, 'src/background/index.ts'),
-      popup: join(root, 'src/popup/popup.ts'),
-      options: join(root, 'src/options/options.ts'),
-      'popup-style': join(root, 'src/popup/popup.css'),
-      'options-style': join(root, 'src/options/options.css'),
-    },
+function esbuildOptions(target: Target): esbuild.BuildOptions[] {
+  const common: esbuild.BuildOptions = {
     outdir: join(root, 'dist', target),
     bundle: true,
     format: 'iife',
     target: target === 'firefox' ? ['firefox140'] : ['chrome120'],
-    // Readable output: easier to debug and to get through store review.
-    minify: false,
     legalComments: 'none',
-    // Escape non-ASCII characters (− etc.): a single one makes the engine
-    // keep the whole script source as UTF-16, doubling its memory in every tab.
+    // Escape non-ASCII characters (\u2212 etc.): a single one makes the engine
+    // keep the whole script source as UTF-16, doubling its memory.
     charset: 'ascii',
     logLevel: 'warning',
   };
+  return [
+    // Loaded into every github.com tab, so it is minified (~40% smaller
+    // source to keep in memory and parse). Rebuild unminified with
+    // --readable to debug it.
+    { ...common, entryPoints: { content: join(root, 'src/content/index.ts') }, minify: !readable },
+    // Readable output: easier to debug and to get through store review.
+    {
+      ...common,
+      entryPoints: {
+        background: join(root, 'src/background/index.ts'),
+        popup: join(root, 'src/popup/popup.ts'),
+        options: join(root, 'src/options/options.ts'),
+        'popup-style': join(root, 'src/popup/popup.css'),
+        'options-style': join(root, 'src/options/options.css'),
+      },
+    },
+  ];
 }
 
 async function writeStatic(target: Target): Promise<void> {
@@ -125,11 +134,10 @@ for (const target of targets) {
   await rm(join(root, 'dist', target), { recursive: true, force: true });
   await writeStatic(target);
   if (watch) {
-    const ctx = await esbuild.context(esbuildOptions(target));
-    await ctx.watch();
+    for (const options of esbuildOptions(target)) await (await esbuild.context(options)).watch();
     console.log(`watching dist/${target}`);
   } else {
-    await esbuild.build(esbuildOptions(target));
+    await Promise.all(esbuildOptions(target).map((options) => esbuild.build(options)));
     if (shouldPackage) await packageTarget(target);
     console.log(`built dist/${target}`);
   }
