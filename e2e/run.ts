@@ -32,6 +32,93 @@ interface Diffstat {
   files: number | null;
 }
 
+/**
+ * Plays a React re-render of the header diffstat in the page, with GitHub's
+ * own numbers (`additions`, `deletions`): `write` writes them into the
+ * existing text nodes, `text` replaces those nodes, `element` replaces the
+ * whole diffstat. Resolves with the additions shown one microtask later
+ * (`write`: patching must happen before the page paints).
+ */
+async function rerenderHeader(page: Page, how: 'write' | 'text' | 'element', additions: number, deletions: number): Promise<string> {
+  return page.evaluate(
+    async ({ how, additions, deletions }) => {
+      const add = [...document.querySelectorAll('.fgColor-success, .color-fg-success')].find(
+        (e) =>
+          /^\s*\+[\d.,]+\s*$/.test(e.textContent ?? '') &&
+          /danger/.test(e.nextElementSibling?.className ?? '') &&
+          !e.closest('[id^="diff-"]:not(#diff-comparison-viewer-container)'),
+      )!;
+      const del = add.nextElementSibling!;
+      const numberText = (el: Element) => [...el.childNodes].find((n) => n.nodeType === 3 && /\d/.test(n.nodeValue ?? '')) as Text;
+      const github = (node: Text, value: number) => (node.nodeValue ?? '').replace(/[\d.,]+/, value.toLocaleString('en-US'));
+      if (how === 'element') {
+        const box = add.parentElement!;
+        const copy = box.cloneNode(true) as Element;
+        copy.querySelectorAll('[data-prune-ui]').forEach((e) => e.remove());
+        const [a, d] = [copy.children[[...box.children].indexOf(add)]!, copy.children[[...box.children].indexOf(del)]!];
+        numberText(a).nodeValue = github(numberText(a), additions);
+        numberText(d).nodeValue = github(numberText(d), deletions);
+        box.replaceWith(copy);
+        return '';
+      }
+      for (const [el, value] of [[add, additions], [del, deletions]] as const) {
+        const node = numberText(el);
+        if (how === 'write') node.nodeValue = github(node, value);
+        else node.replaceWith(document.createTextNode(github(node, value)));
+      }
+      await Promise.resolve();
+      return add.textContent ?? '';
+    },
+    { how, additions, deletions },
+  );
+}
+
+/** Re-renders the header in each way and checks PRune patches it again (and keeps the pill next to it). */
+async function rerenderHeaderChecks(page: Page, where: string, total: Diffstat, expected: Diffstat): Promise<void> {
+  const until = async (want: number | null) => {
+    let h = await readHeader(page);
+    for (let i = 0; i < 20 && h.additions !== want; i++) {
+      await page.waitForTimeout(100);
+      h = await readHeader(page);
+    }
+    return h;
+  };
+  const written = await rerenderHeader(page, 'write', total.additions!, total.deletions!);
+  check(
+    `${where}: GitHub's number written back is re-patched before the next paint`,
+    written.trim() === `+${expected.additions!.toLocaleString('en-US')}`,
+    `got ${written.trim()}`,
+  );
+  const counter = await page.evaluate(async (files) => {
+    const el = [...document.querySelectorAll('a[href$="/files"], a[href$="/changes"]')]
+      .map((a) => a.querySelector('.Counter, [data-component="CounterLabel"]'))
+      .find(Boolean)!;
+    const node = [...el.childNodes].find((n) => n.nodeType === 3 && /\d/.test(n.nodeValue ?? ''))!;
+    node.nodeValue = String(files);
+    await Promise.resolve();
+    return el.textContent;
+  }, total.files);
+  check(`${where}: same for the files counter`, Number(counter?.replace(/\D/g, '')) === expected.files, `got ${counter}`);
+  await rerenderHeader(page, 'text', total.additions!, total.deletions!);
+  const text = await until(expected.additions);
+  check(
+    `${where}: replaced text nodes are patched again`,
+    text.additions === expected.additions && text.deletions === expected.deletions,
+    `got +${text.additions} −${text.deletions}`,
+  );
+  await rerenderHeader(page, 'element', total.additions!, total.deletions!);
+  const element = await until(expected.additions);
+  const pill = await page.evaluate(() => {
+    const host = document.querySelector('[data-prune-ui="indicator"]');
+    return !!host?.isConnected && !host.classList.contains('floating') && !!host.parentElement?.querySelector('.fgColor-success, .color-fg-success');
+  });
+  check(
+    `${where}: a replaced diffstat is patched again, pill next to it`,
+    element.additions === expected.additions && element.deletions === expected.deletions && pill,
+    `got +${element.additions} −${element.deletions}, pill ${pill ? 'next to it' : 'elsewhere'}`,
+  );
+}
+
 async function readHeader(page: Page): Promise<Diffstat> {
   return page.evaluate(() => {
     const num = (t: string | null | undefined) => (t ? Number(t.replace(/\D/g, '')) : null);
@@ -132,6 +219,12 @@ try {
   check('toggling on again re-applies', on.additions === expected.additions, `got +${on.additions}`);
   await page.mouse.move(10, 900);
 
+  // ---- React re-rendering the header ----------------------------------------------
+  // Once the page has settled, PRune only watches the header and its own nodes.
+  await page.waitForTimeout(1000);
+  const github = { ...total, files: tree.diffs.length };
+  await rerenderHeaderChecks(page, 'conversation tab', github, expected);
+
   // ---- Files tab (soft navigation via the tab link) -------------------------
   await page.locator(`a[href$="/pull/23648/files"]`).first().click();
   await page.waitForURL(/\/files/);
@@ -169,6 +262,19 @@ try {
   await page.waitForTimeout(300);
   check('"Show diff" reveals the file in place', await lockDiff.isVisible());
   await page.screenshot({ path: join(outDir, 'files-revealed.png') });
+
+  // More content after the diffs (GitHub rendering more of them) → the section moves back to the end, before the next paint.
+  const sectionLast = await page.evaluate(async () => {
+    const host = document.querySelector('[data-prune-ui="section"]')!;
+    const more = document.createElement('div');
+    host.parentElement!.append(more);
+    await Promise.resolve();
+    const last = !host.nextElementSibling;
+    more.remove();
+    return last;
+  });
+  check('section moves back right away after diffs added after it', sectionLast);
+  await rerenderHeaderChecks(page, 'files tab', github, expected);
 
   // ---- Back to conversation (soft navigation) ---------------------------------
   await page.goBack();
