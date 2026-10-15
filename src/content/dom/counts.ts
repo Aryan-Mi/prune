@@ -39,8 +39,8 @@ export class CountPatcher {
   private patchedNodes = new WeakSet<Text>();
   private anchor: Element | null = null;
   /**
-   * The smallest element holding every counter the last full search found
-   * (on GitHub, a small part of the PR header). Searched first next time.
+   * The smallest element holding every counter found last time (on GitHub,
+   * a small part of the PR header). Searched first next time.
    */
   private scope: Element | null = null;
   /** The numbers last applied; when they change, the whole page is searched again. */
@@ -161,7 +161,7 @@ export class CountPatcher {
     this.counterMisses = 0;
   }
 
-  /** Makes the next `apply()` search the whole page (e.g. another tab of the PR is showing). */
+  /** Forgets where the counters were (e.g. another tab of the PR is showing). */
   rescope(): void {
     this.scope = null;
     this.counterMisses = 0;
