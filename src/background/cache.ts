@@ -91,7 +91,9 @@ export function saveFileList(key: string, etag: string, files: PrFileList): Prom
     } catch {
       // Out of quota or storage.session unavailable: start over.
       index = Promise.resolve({});
-      await ext.storage.session.clear().catch(() => {});
+      const all = await ext.storage.session.get(null).catch(() => ({}));
+      const keys = Object.keys(all).filter((k) => k === INDEX_KEY || k.startsWith('fileList:'));
+      await ext.storage.session.remove(keys).catch(() => {});
     }
   });
 }
