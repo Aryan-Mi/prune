@@ -40,6 +40,8 @@ interface Sample {
   functions: Map<string, number>;
   /** Time per non-content.js leaf frame called from content.js (e.g. querySelectorAll, GC). */
   natives: Map<string, number>;
+  /** Self time per function within the longest task. */
+  longest: Map<string, number>;
 }
 
 interface ProfileNode {
@@ -67,6 +69,7 @@ function contentScriptTasks(
   profile: CpuProfile,
   functions = new Map<string, number>(),
   natives = new Map<string, number>(),
+  longest = new Map<string, number>(),
 ): number[] {
   const parent = new Map<number, number>();
   for (const n of profile.nodes) for (const c of n.children ?? []) parent.set(c, n.id);
@@ -92,23 +95,35 @@ function contentScriptTasks(
   let t = profile.startTime;
   let runStart = -1;
   let runEnd = -1;
+  let runFunctions = new Map<string, number>();
+  const endRun = () => {
+    const ms = (runEnd - runStart) / 1000;
+    if (ms > Math.max(0, ...tasks)) {
+      longest.clear();
+      for (const [k, v] of runFunctions) longest.set(k, v);
+    }
+    tasks.push(ms);
+  };
   for (let i = 0; i < profile.samples.length; i++) {
     t += profile.timeDeltas[i]!;
     if (!isOurs(profile.samples[i]!)) continue;
     const dt = Math.min(profile.timeDeltas[i + 1] ?? SAMPLE_US, SAMPLE_US * 4);
     const own = ownFrame(profile.samples[i]!).callFrame;
-    add(functions, `${own.functionName || '(top level)'}:${own.lineNumber + 1}`, dt / 1000);
+    const key = `${own.functionName || '(top level)'}:${own.lineNumber + 1}`;
+    add(functions, key, dt / 1000);
     const leaf = byId.get(profile.samples[i]!)!.callFrame;
     if (!OUR_SCRIPT.test(leaf.url)) add(natives, `${leaf.functionName || '(anonymous)'} ← ${own.functionName || '(top level)'}`, dt / 1000);
     if (runStart >= 0 && t - runEnd <= SAMPLE_US * 4) {
       runEnd = t + dt;
     } else {
-      if (runStart >= 0) tasks.push((runEnd - runStart) / 1000);
+      if (runStart >= 0) endRun();
       runStart = t;
       runEnd = t + dt;
+      runFunctions = new Map();
     }
+    add(runFunctions, key, dt / 1000);
   }
-  if (runStart >= 0) tasks.push((runEnd - runStart) / 1000);
+  if (runStart >= 0) endRun();
   return tasks;
 }
 
@@ -145,7 +160,8 @@ async function measure(page: Page, cdp: CDPSession, url: string): Promise<Sample
   await cdp.send('HeapProfiler.stopSampling');
   const functions = new Map<string, number>();
   const natives = new Map<string, number>();
-  const tasks = contentScriptTasks(cpu, functions, natives);
+  const longest = new Map<string, number>();
+  const tasks = contentScriptTasks(cpu, functions, natives, longest);
   const pill = await page.evaluate(
     () => document.querySelector('[data-prune-ui="indicator"]')?.shadowRoot?.querySelector('.label')?.textContent ?? '',
   );
@@ -157,6 +173,7 @@ async function measure(page: Page, cdp: CDPSession, url: string): Promise<Sample
     heapKb: heapBytes(profile.head) / 1024,
     functions,
     natives,
+    longest,
   };
 }
 
@@ -203,7 +220,12 @@ for (const [name, samples] of Object.entries(results)) {
       console.log(`    ${key} (mean ms per run):`);
       for (const [k, v] of top) console.log(`      ${v.toFixed(2).padStart(7)}  ${k}`);
     }
+    const worstRun = samples.reduce((a, b) => (b.maxTaskMs > a.maxTaskMs ? b : a));
+    console.log(`    longest task of the worst run (${worstRun.maxTaskMs.toFixed(1)} ms):`);
+    for (const [k, v] of [...worstRun.longest].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+      console.log(`      ${v.toFixed(2).padStart(7)}  ${k}`);
+    }
   }
-  summary[name] = { samples: samples.map(({ functions, natives, ...rest }) => rest), median: { totalMs: med('totalMs'), maxTaskMs: med('maxTaskMs'), heapKb: med('heapKb') }, worst: { totalMs: worst('totalMs'), maxTaskMs: worst('maxTaskMs'), heapKb: worst('heapKb') } };
+  summary[name] = { samples: samples.map(({ functions, natives, longest, ...rest }) => rest), median: { totalMs: med('totalMs'), maxTaskMs: med('maxTaskMs'), heapKb: med('heapKb') }, worst: { totalMs: worst('totalMs'), maxTaskMs: worst('maxTaskMs'), heapKb: worst('heapKb') } };
 }
 if (JSON_OUT) await writeFile(JSON_OUT, JSON.stringify(summary, null, 2));
