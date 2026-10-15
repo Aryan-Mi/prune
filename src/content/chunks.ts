@@ -18,24 +18,31 @@ let collapse: Promise<typeof CollapseChunk> | null = null;
 
 /** The ✂ pill's popover: imported when the pointer reaches the pill, or it gets focus. */
 export function withPopover(use: (chunk: typeof PopoverChunk) => void): void {
-  popover ??= import(browser.runtime.getURL('popover.js'));
-  run(popover, use, () => (popover = null));
+  run(() => (popover ??= import(browser.runtime.getURL('popover.js'))), use, () => (popover = null));
 }
 
 /** The "Pruned files" box: imported when its placeholder comes near the viewport. */
 export function withSection(use: (chunk: typeof SectionChunk) => void): void {
-  section ??= import(browser.runtime.getURL('section.js'));
-  run(section, use, () => (section = null));
+  run(() => (section ??= import(browser.runtime.getURL('section.js'))), use, () => (section = null));
 }
 
 /** Collapse mode: imported only when that setting is on. */
 export function withCollapse(use: (chunk: typeof CollapseChunk) => void): void {
-  collapse ??= import(browser.runtime.getURL('collapse.js'));
-  run(collapse, use, () => (collapse = null));
+  run(() => (collapse ??= import(browser.runtime.getURL('collapse.js'))), use, () => (collapse = null));
 }
 
-/** Calls `use` once the chunk is there; a failed import is logged and tried again next time. */
-function run<T>(chunk: Promise<T>, use: (chunk: T) => void, forget: () => void): void {
+/**
+ * Calls `use` once the chunk is there; a failed import is logged and tried
+ * again next time. (`getURL` may throw once the extension was updated or
+ * removed while the page stayed open.)
+ */
+function run<T>(load: () => Promise<T>, use: (chunk: T) => void, forget: () => void): void {
+  let chunk: Promise<T>;
+  try {
+    chunk = load();
+  } catch (err) {
+    chunk = Promise.reject(err);
+  }
   chunk.then(use, (err: unknown) => {
     forget();
     console.error('[PRune]', err);
