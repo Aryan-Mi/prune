@@ -33,12 +33,18 @@ let open = true;
 /**
  * "Pruned files" box appended after the last file in the diff list (hide
  * mode). Lists hidden files and lets you reveal any of them in place.
+ *
+ * The rows are only built once the box comes near the viewport: at the end of
+ * a long diff, most visits never get there.
  */
 export class PrunedSection {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private readonly style = styleElement(BASE_CSS + CSS);
   private state: ViewState | null = null;
+  /** The box has been near the viewport, so its rows are rendered. */
+  private near = false;
+  private nearby: IntersectionObserver | null = null;
 
   private readonly actions: UiActions;
 
@@ -52,10 +58,28 @@ export class PrunedSection {
   /** Appends the section after the diff list; a no-op when already in place. */
   mount(container: Element): void {
     if (this.host.parentElement !== container || container.lastElementChild !== this.host) container.append(this.host);
+    if (!this.near && !this.nearby) {
+      this.nearby = new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((e) => e.isIntersecting)) return;
+          this.stopWatching();
+          this.near = true;
+          if (this.state && open) this.render(this.state);
+        },
+        { rootMargin: '1000px 0px' },
+      );
+      this.nearby.observe(this.host);
+    }
   }
 
   unmount(): void {
     this.host.remove();
+    this.stopWatching();
+  }
+
+  private stopWatching(): void {
+    this.nearby?.disconnect();
+    this.nearby = null;
   }
 
   render(state: ViewState): void {
@@ -79,6 +103,7 @@ export class PrunedSection {
     title.append(statElement(result.removed.additions, result.removed.deletions));
     title.addEventListener('click', () => {
       open = !open;
+      this.near = true;
       if (this.state) this.render(this.state);
     });
     const toggleAll = el('button', 'btn', allRevealed ? 'Hide all diffs' : 'Show all diffs');
@@ -88,19 +113,27 @@ export class PrunedSection {
     box.append(bar);
 
     const rows = el('ul', 'rows');
-    for (const file of result.pruned) {
-      const revealed = state.revealed.has(file.digest);
-      const item = el('li', `item${revealed ? ' revealed' : ''}`);
-      const name = el('div', 'name');
-      name.append(pathElement(file.path), whyElement(file));
-      const button = el('button', 'btn', revealed ? 'Hide diff' : 'Show diff');
-      button.type = 'button';
-      button.addEventListener('click', () => {
+    if (open && this.near) {
+      result.pruned.forEach((file, i) => {
+        const revealed = state.revealed.has(file.digest);
+        const item = el('li', `item${revealed ? ' revealed' : ''}`);
+        const name = el('div', 'name');
+        name.append(pathElement(file.path), whyElement(file));
+        const button = el('button', 'btn', revealed ? 'Hide diff' : 'Show diff');
+        button.type = 'button';
+        button.dataset.i = String(i);
+        item.append(name, statElement(file.additions, file.deletions), button);
+        rows.append(item);
+      });
+      // One listener for all rows.
+      rows.addEventListener('click', (e) => {
+        const i = (e.target as Element).closest<HTMLElement>('button[data-i]')?.dataset.i;
+        const file = i === undefined ? undefined : result.pruned[Number(i)];
+        if (!file) return;
+        const revealed = state.revealed.has(file.digest);
         this.actions.setRevealed(file.digest, !revealed);
         if (!revealed) this.actions.goToFile(file);
       });
-      item.append(name, statElement(file.additions, file.deletions), button);
-      rows.append(item);
     }
     box.append(rows);
 

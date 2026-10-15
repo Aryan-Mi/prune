@@ -1,6 +1,7 @@
 /**
  * Offline, deterministic memory benchmark of what the content script keeps
- * for a PR: the file list, compiled rules, prune result and stylesheet. Uses
+ * for a PR: the pruned files the background script sends back (it parses and
+ * prunes the file list) and the stylesheet built from them. Uses
  * a cached copy of nodejs/node#65161's `page_data/file_tree` (3000 files), so
  * it needs the network only once. Measures memory retained after GC (JS heap
  * plus typed-array backing stores, which live outside it), plus where
@@ -15,9 +16,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { Session } from 'node:inspector/promises';
 import { join } from 'node:path';
 import { buildCss } from '../src/content/dom/styles.ts';
-import { fetchPrFiles, parsePrUrl } from '../src/content/github.ts';
-import { computePrune } from '../src/content/prune.ts';
-import { compileRules } from '../src/shared/rules.ts';
+import { fetchFileTree, parsePrUrl } from '../src/content/github.ts';
+import { prunePr } from '../src/shared/prune.ts';
 import { DEFAULT_SETTINGS } from '../src/shared/settings.ts';
 
 const PR_URL = 'https://github.com/nodejs/node/pull/65161';
@@ -73,12 +73,12 @@ const settings = { ...DEFAULT_SETTINGS };
 
 /** What the controller holds on to while the PR is open. */
 async function load() {
-  const files = await fetchPrFiles(parsePrUrl('/nodejs/node/pull/65161')!);
-  const compiled = compileRules(settings);
-  const result = computePrune(files, {}, compiled, settings);
+  const fileTree = await fetchFileTree(parsePrUrl('/nodejs/node/pull/65161')!);
+  // The background script's work; the reply arrives as a copy.
+  const result = structuredClone(prunePr(fileTree, {}, settings, {}));
   // The stylesheet is built but, like in the content script, not kept.
   const cssLength = buildCss(result, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() }).length;
-  return { files, compiled, result, cssLength };
+  return { result, cssLength };
 }
 
 // Warm up first so code compilation and the rules cache aren't counted as data.
@@ -88,12 +88,12 @@ session.connect();
 await session.post('HeapProfiler.enable');
 const before = usage();
 await session.post('HeapProfiler.startSampling', { samplingInterval: 512 });
-const { files, result, cssLength, ...retained } = await load();
+const { result, cssLength, ...retained } = await load();
 const after = usage();
 const { profile } = (await session.post('HeapProfiler.getSamplingProfile')) as { profile: { head: HeapNode } };
 await session.post('HeapProfiler.stopSampling');
 
-console.log(`${files.length} files, ${result.pruned.length} pruned, stylesheet ${(cssLength / 1024).toFixed(1)} KB`);
+console.log(`${result.listed} files, ${result.pruned.length} pruned, stylesheet ${(cssLength / 1024).toFixed(1)} KB`);
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 const heap = after.heap - before.heap;
 const buffers = after.buffers - before.buffers;

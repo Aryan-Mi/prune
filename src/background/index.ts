@@ -1,6 +1,7 @@
 import { ext } from '../shared/browser.ts';
 import type { Message } from '../shared/messages.ts';
 import { parseRules } from '../shared/matcher.ts';
+import { prunePr, type PruneResult } from '../shared/prune.ts';
 import { loadRemoteCache, loadSettings, REMOTE_KEY, REMOTE_TTL_MS, type RemoteCache } from '../shared/settings.ts';
 
 /** Rules files larger than this are rejected; real ones are a few KB. */
@@ -57,12 +58,33 @@ function refreshOnce(force = false): Promise<RemoteCache | null> {
   return inflight;
 }
 
+/**
+ * Parses and prunes a PR's file list for a content script. This is the bulk
+ * of PRune's work on a big PR (a 700 KB response with 3000 files), and doing
+ * it here keeps it off the GitHub page's main thread and out of its memory:
+ * the page only gets the pruned files back.
+ */
+async function prune(msg: Extract<Message, { type: 'prune' }>): Promise<PruneResult> {
+  const [settings, remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
+  if (settings.remoteUrl && (remote?.url !== settings.remoteUrl || Date.now() - remote.fetchedAt > REMOTE_TTL_MS)) {
+    // Content scripts reload when the new copy lands in storage.
+    refreshOnce().catch(() => {});
+  }
+  return prunePr(msg.fileTree, msg.totals, settings, {
+    repoText: msg.repoText,
+    repoPath: msg.repoPath,
+    remoteText: remote?.url === settings.remoteUrl ? remote.text : null,
+  });
+}
+
 // Respond via sendResponse + `return true`: works in Firefox and in every
 // Chromium version (returning a Promise is not supported everywhere).
 ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse: (value: unknown) => void) => {
   let task: Promise<unknown> | undefined;
   if (msg.type === 'open-options') task = ext.runtime.openOptionsPage();
   else if (msg.type === 'refresh-remote') task = refreshOnce(msg.force);
+  else if (msg.type === 'prune') task = prune(msg);
+  else if (msg.type === 'warm') task = Promise.resolve(null);
   if (!task) return undefined;
   task.then(
     (value) => sendResponse(value ?? null),

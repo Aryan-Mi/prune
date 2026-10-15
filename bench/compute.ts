@@ -1,7 +1,8 @@
 /**
- * Offline micro-benchmark of the content script's data path on a real huge PR
- * (nodejs/node#65161, GitHub's 3000-file cap): parsing the file_tree response,
- * compiling rules, computing the prune result and building the stylesheet.
+ * Offline micro-benchmark of the data path on a real huge PR (nodejs/node#65161,
+ * GitHub's 3000-file cap): parsing the file_tree response, compiling rules and
+ * computing the prune result (the background script's part), then building
+ * the stylesheet (the content script's part).
  * The response is cached in .cache/ on first run.
  *
  *   node bench/compute.ts [--iterations=50]
@@ -9,8 +10,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildCss } from '../src/content/dom/styles.ts';
-import { parseFileTree } from '../src/content/github.ts';
-import { computePrune } from '../src/content/prune.ts';
+import { parseFileTree } from '../src/shared/filetree.ts';
+import { computePrune } from '../src/shared/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
 import { DEFAULT_SETTINGS } from '../src/shared/settings.ts';
 

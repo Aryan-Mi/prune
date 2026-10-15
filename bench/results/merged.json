@@ -1,0 +1,222 @@
+{
+  "huge PR · conversation": {
+    "samples": [
+      {
+        "totalMs": 13.421999999999999,
+        "maxTaskMs": 5.08,
+        "tasks": 13,
+        "heapKb": 554.33984375
+      },
+      {
+        "totalMs": 18.099999999999998,
+        "maxTaskMs": 6.025,
+        "tasks": 16,
+        "heapKb": 660.55078125
+      },
+      {
+        "totalMs": 16.8,
+        "maxTaskMs": 6.682,
+        "tasks": 11,
+        "heapKb": 633.68359375
+      },
+      {
+        "totalMs": 15.634,
+        "maxTaskMs": 6.466,
+        "tasks": 11,
+        "heapKb": 613.1640625
+      },
+      {
+        "totalMs": 15.607999999999999,
+        "maxTaskMs": 5.817,
+        "tasks": 13,
+        "heapKb": 682.58203125
+      }
+    ],
+    "median": {
+      "totalMs": 15.634,
+      "maxTaskMs": 6.025,
+      "heapKb": 633.68359375
+    },
+    "worst": {
+      "totalMs": 18.099999999999998,
+      "maxTaskMs": 6.682,
+      "heapKb": 682.58203125
+    }
+  },
+  "huge PR · files": {
+    "samples": [
+      {
+        "totalMs": 22.654999999999998,
+        "maxTaskMs": 5.919,
+        "tasks": 18,
+        "heapKb": 666.29296875
+      },
+      {
+        "totalMs": 23.631,
+        "maxTaskMs": 7.277,
+        "tasks": 20,
+        "heapKb": 676.91015625
+      },
+      {
+        "totalMs": 22.875,
+        "maxTaskMs": 6.283,
+        "tasks": 16,
+        "heapKb": 658.14453125
+      },
+      {
+        "totalMs": 25.006999999999998,
+        "maxTaskMs": 6.667,
+        "tasks": 23,
+        "heapKb": 684.01171875
+      },
+      {
+        "totalMs": 24.911999999999995,
+        "maxTaskMs": 6.987,
+        "tasks": 20,
+        "heapKb": 666.62890625
+      }
+    ],
+    "median": {
+      "totalMs": 23.631,
+      "maxTaskMs": 6.667,
+      "heapKb": 666.62890625
+    },
+    "worst": {
+      "totalMs": 25.006999999999998,
+      "maxTaskMs": 7.277,
+      "heapKb": 684.01171875
+    }
+  },
+  "small PR · conversation": {
+    "samples": [
+      {
+        "totalMs": 9.995000000000001,
+        "maxTaskMs": 1.694,
+        "tasks": 16,
+        "heapKb": 201.41015625
+      },
+      {
+        "totalMs": 9.368,
+        "maxTaskMs": 2.224,
+        "tasks": 14,
+        "heapKb": 188.671875
+      },
+      {
+        "totalMs": 9.432,
+        "maxTaskMs": 2.005,
+        "tasks": 14,
+        "heapKb": 182.5
+      },
+      {
+        "totalMs": 8.938,
+        "maxTaskMs": 1.849,
+        "tasks": 15,
+        "heapKb": 200.7890625
+      },
+      {
+        "totalMs": 8.962,
+        "maxTaskMs": 1.989,
+        "tasks": 13,
+        "heapKb": 174.609375
+      }
+    ],
+    "median": {
+      "totalMs": 9.368,
+      "maxTaskMs": 1.989,
+      "heapKb": 188.671875
+    },
+    "worst": {
+      "totalMs": 9.995000000000001,
+      "maxTaskMs": 2.224,
+      "heapKb": 201.41015625
+    }
+  },
+  "small PR · files": {
+    "samples": [
+      {
+        "totalMs": 6.5729999999999995,
+        "maxTaskMs": 1.55,
+        "tasks": 9,
+        "heapKb": 188.109375
+      },
+      {
+        "totalMs": 7.861999999999999,
+        "maxTaskMs": 1.712,
+        "tasks": 11,
+        "heapKb": 212.71875
+      },
+      {
+        "totalMs": 7.58,
+        "maxTaskMs": 1.605,
+        "tasks": 9,
+        "heapKb": 203.96875
+      },
+      {
+        "totalMs": 7.165,
+        "maxTaskMs": 1.801,
+        "tasks": 10,
+        "heapKb": 201.71875
+      },
+      {
+        "totalMs": 6.4079999999999995,
+        "maxTaskMs": 1.578,
+        "tasks": 8,
+        "heapKb": 207.44921875
+      }
+    ],
+    "median": {
+      "totalMs": 7.165,
+      "maxTaskMs": 1.605,
+      "heapKb": 203.96875
+    },
+    "worst": {
+      "totalMs": 7.861999999999999,
+      "maxTaskMs": 1.801,
+      "heapKb": 212.71875
+    }
+  },
+  "non-PR page (repo home)": {
+    "samples": [
+      {
+        "totalMs": 1.042,
+        "maxTaskMs": 0.962,
+        "tasks": 2,
+        "heapKb": 54.01171875
+      },
+      {
+        "totalMs": 0.938,
+        "maxTaskMs": 0.844,
+        "tasks": 2,
+        "heapKb": 56.109375
+      },
+      {
+        "totalMs": 1.228,
+        "maxTaskMs": 0.804,
+        "tasks": 5,
+        "heapKb": 58.96875
+      },
+      {
+        "totalMs": 0.843,
+        "maxTaskMs": 0.764,
+        "tasks": 2,
+        "heapKb": 56.59375
+      },
+      {
+        "totalMs": 1.212,
+        "maxTaskMs": 0.996,
+        "tasks": 3,
+        "heapKb": 51.63671875
+      }
+    ],
+    "median": {
+      "totalMs": 1.042,
+      "maxTaskMs": 0.844,
+      "heapKb": 56.109375
+    },
+    "worst": {
+      "totalMs": 1.228,
+      "maxTaskMs": 0.996,
+      "heapKb": 58.96875
+    }
+  }
+}

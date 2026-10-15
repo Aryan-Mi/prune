@@ -1,5 +1,5 @@
-import type { PrFile } from '../github.ts';
-import type { PruneResult } from '../prune.ts';
+import type { PrFile } from '../../shared/filetree.ts';
+import type { PruneResult } from '../../shared/prune.ts';
 
 export type ViewStatus = 'loading' | 'ready' | 'error';
 

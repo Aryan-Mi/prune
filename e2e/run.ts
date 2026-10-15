@@ -144,6 +144,9 @@ try {
     'pruned file hidden in file tree',
     !(await page.locator(`#file-tree-item-diff-${lock.pathDigest}`).isVisible()),
   );
+  // Its rows are built once it comes near the viewport.
+  await section.scrollIntoViewIfNeeded();
+  await section.locator('.item').first().waitFor({ timeout: 5_000 }).catch(() => {});
   check('"Pruned files" section lists it', (await section.locator('.box').textContent())?.includes('pnpm-lock.yaml') ?? false);
   const filesHeader = await readHeader(page);
   check(

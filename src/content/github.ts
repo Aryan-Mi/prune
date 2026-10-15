@@ -1,4 +1,5 @@
 import { REPO_CONFIG_PATHS } from '../shared/defaults.ts';
+import type { PrTotals } from '../shared/filetree.ts';
 
 export interface PrRef {
   owner: string;
@@ -35,95 +36,6 @@ export function parsePrUrl(pathname: string): PrRef | null {
   };
 }
 
-/** One changed file, as reported by GitHub's own `page_data/file_tree` endpoint. */
-export interface PrFile {
-  path: string;
-  /** sha256(path) hex. GitHub uses `diff-<digest>` as the DOM id/anchor of each file diff. */
-  digest: string;
-  additions: number;
-  deletions: number;
-  /** Marked `linguist-generated` via .gitattributes. */
-  generated: boolean;
-}
-
-/** sha256 hex, as GitHub reports it. */
-const DIGEST = /^[0-9a-f]{64}$/;
-
-/**
- * The PR's changed files in GitHub's order, stored column-wise. The list is
- * kept for as long as the PR is open (to recompute when settings change), and
- * for a 3000-file PR one object per file takes far more memory than two string
- * arrays plus typed arrays for the line counts. The path and digest strings
- * are the ones JSON.parse created, so they're not copied.
- */
-export class PrFileList {
-  length = 0;
-  private readonly paths: string[] = [];
-  private readonly digests: string[] = [];
-  /** Additions and deletions, interleaved. */
-  private readonly lines: Uint32Array;
-  private readonly generated: Uint8Array;
-
-  constructor(capacity: number) {
-    this.lines = new Uint32Array(capacity * 2);
-    this.generated = new Uint8Array(capacity);
-  }
-
-  static of(files: readonly PrFile[]): PrFileList {
-    const list = new PrFileList(files.length);
-    for (const f of files) list.push(f.path, f.digest, f.additions, f.deletions, f.generated);
-    return list;
-  }
-
-  /** Appends a file; at most `capacity` files fit. */
-  push(path: string, digest: string, additions: number, deletions: number, generated: boolean): void {
-    const i = this.length++;
-    this.paths.push(path);
-    this.digests.push(digest);
-    this.lines[i * 2] = additions;
-    this.lines[i * 2 + 1] = deletions;
-    this.generated[i] = generated ? 1 : 0;
-  }
-
-  path(i: number): string {
-    return this.paths[i]!;
-  }
-
-  digest(i: number): string {
-    return this.digests[i]!;
-  }
-
-  additions(i: number): number {
-    return this.lines[i * 2]!;
-  }
-
-  deletions(i: number): number {
-    return this.lines[i * 2 + 1]!;
-  }
-
-  isGenerated(i: number): boolean {
-    return this.generated[i] === 1;
-  }
-
-  get(i: number): PrFile {
-    return {
-      path: this.path(i),
-      digest: this.digest(i),
-      additions: this.additions(i),
-      deletions: this.deletions(i),
-      generated: this.isGenerated(i),
-    };
-  }
-}
-
-interface RawDiff {
-  path?: string;
-  pathDigest?: string;
-  linesAdded?: number;
-  linesDeleted?: number;
-  isGenerated?: boolean;
-}
-
 const JSON_HEADERS = {
   Accept: 'application/json',
   'X-Requested-With': 'XMLHttpRequest',
@@ -134,26 +46,18 @@ const JSON_HEADERS = {
  * tree. Runs with the user's session, so private repositories work, and it is
  * far cheaper than downloading the diff (no file contents, ~250 bytes/file).
  * GitHub caps the list at 3000 files, the same limit as its UI and API.
+ *
+ * Returned as text: parsing and matching happen in the background script,
+ * off the page's main thread (see shared/prune.ts).
  */
-export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrFileList> {
+export async function fetchFileTree(pr: PrRef, signal?: AbortSignal): Promise<string> {
   const res = await fetch(`${pr.basePath}/page_data/file_tree`, {
     headers: JSON_HEADERS,
     credentials: 'same-origin',
     signal,
   });
   if (!res.ok) throw new Error(`file_tree request failed: HTTP ${res.status}`);
-  return parseFileTree(await res.text());
-}
-
-export function parseFileTree(text: string): PrFileList {
-  const diffs = (JSON.parse(text) as { diffs?: RawDiff[] }).diffs ?? [];
-  // Straight into columns: no intermediate object per file.
-  const list = new PrFileList(diffs.length);
-  for (const d of diffs) {
-    if (!d.path || !d.pathDigest || !DIGEST.test(d.pathDigest)) continue;
-    list.push(d.path, d.pathDigest, d.linesAdded ?? 0, d.linesDeleted ?? 0, d.isGenerated === true);
-  }
-  return list;
+  return res.text();
 }
 
 export interface RepoConfig {
@@ -183,12 +87,6 @@ export async function fetchRepoConfig(pr: PrRef, ref: string, signal?: AbortSign
     if (r.status === 'fulfilled' && r.value) return r.value;
   }
   return { path: null, text: null };
-}
-
-export interface PrTotals {
-  additions: number;
-  deletions: number;
-  files: number;
 }
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {

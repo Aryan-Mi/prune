@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { PrFileList, type PrFile } from '../src/content/github.ts';
+import { PrFileList, type PrFile } from '../src/shared/filetree.ts';
 import { buildCss } from '../src/content/dom/styles.ts';
-import { computePrune } from '../src/content/prune.ts';
+import { computePrune, prunePr } from '../src/shared/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from '../src/shared/settings.ts';
 
@@ -57,6 +57,35 @@ describe('computePrune', () => {
     const s = normalizeSettings({ disabledGroups: ['lockfiles'], respectLinguistGenerated: false });
     const r = computePrune(files, {}, compileRules(s), s);
     expect(r.pruned.map((f) => f.path)).toEqual(['dist/bundle.js']);
+  });
+});
+
+describe('prunePr', () => {
+  test('parses the file_tree response and returns a JSON-safe result', () => {
+    const fileTree = JSON.stringify({
+      diffs: [
+        ...[0, 1, 2].map((i) => {
+          const f = file(`src/f${i}.ts`, i, 0);
+          return { path: f.path, pathDigest: f.digest, linesAdded: i, linesDeleted: 0, changeType: 'MODIFIED' };
+        }),
+        { path: 'yarn.lock', pathDigest: file('yarn.lock', 0, 0).digest, linesAdded: 9, linesDeleted: 1 },
+        { path: 'bad.lock', pathDigest: 'not-a-digest', linesAdded: 1, linesDeleted: 1 },
+      ],
+    });
+    const r = prunePr(fileTree, { files: 5 }, settings, {});
+    expect(r.listed).toBe(4);
+    expect(r.pruned.map((f) => f.path)).toEqual(['yarn.lock']);
+    expect(r.kept).toEqual({ additions: 3, deletions: 0, files: 4 });
+    expect(r.probes).toEqual(['src/f0.ts', 'src/f1.ts', 'src/f2.ts', 'yarn.lock'].map((p) => file(p, 0, 0).digest));
+    expect(r.firstPath).toBe('src/f0.ts');
+    expect(r.sources).toEqual(['Built-in defaults']);
+    expect(JSON.parse(JSON.stringify(r))).toEqual(r);
+  });
+
+  test('probes are the first and last 16 digests', () => {
+    const many = PrFileList.of(Array.from({ length: 40 }, (_, i) => file(`f${i}`, 1, 1)));
+    const r = computePrune(many, {}, compileRules(settings), settings);
+    expect(r.probes).toEqual([...Array.from({ length: 16 }, (_, i) => i), ...Array.from({ length: 16 }, (_, i) => 24 + i)].map((i) => many.digest(i)));
   });
 });
 

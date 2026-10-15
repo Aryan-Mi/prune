@@ -1,5 +1,5 @@
 import { parseCount, replaceCount } from '../../shared/format.ts';
-import type { PrTotals } from '../github.ts';
+import type { PrTotals } from '../../shared/filetree.ts';
 import { queryOutside } from './regions.ts';
 
 /**
@@ -29,6 +29,7 @@ const ADDITION_SELECTOR = '.fgColor-success, .color-fg-success';
 const FILES_LINK_SELECTOR = 'a[href$="/files"], a[href$="/changes"]';
 const DELETION_CLASS = /\b(?:fgColor-danger|color-fg-danger)\b/;
 const FILE_DIFF_ID = /^diff-[0-9a-f]{64}$/;
+const CAPPED_COUNT = /^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*\+[)\s]*$/;
 
 export class CountPatcher {
   private texts: TextPatch[] = [];
@@ -74,12 +75,18 @@ export class CountPatcher {
     const additions: Element[] = [];
     const links: HTMLAnchorElement[] = [];
     for (const el of queryOutside(`${ADDITION_SELECTOR}, ${FILES_LINK_SELECTOR}`, bulk)) {
-      if (el.matches(ADDITION_SELECTOR)) additions.push(el);
-      if (el.matches(FILES_LINK_SELECTOR)) links.push(el as HTMLAnchorElement);
+      if (el.localName === 'a' && el.matches(FILES_LINK_SELECTOR)) links.push(el as HTMLAnchorElement);
+      if (el.classList.contains('fgColor-success') || el.classList.contains('color-fg-success')) additions.push(el);
     }
     this.scanDiffstats(original, kept, additions);
     this.patchFileCounters(basePath, original.files, kept.files, links);
-    if (bulk.length > 0 && !this.bulkChecked && !(this.diffstatPatched && this.counterPatched)) {
+    if (
+      bulk.length > 0 &&
+      !this.bulkChecked &&
+      !(this.diffstatPatched && this.counterPatched) &&
+      // Before then, it is far more likely that the page hasn't rendered it yet.
+      document.readyState === 'complete'
+    ) {
       // Something is missing. Make sure it is not in `bulk`; if it was, keep looking there.
       const patches = this.texts.length + this.attrs.length;
       this.apply(basePath, original, kept);
@@ -128,9 +135,10 @@ export class CountPatcher {
   private scanDiffstats(original: PrTotals, kept: PrTotals | null, additions: Iterable<Element>): void {
     let first: Element | null = null;
     for (const add of additions) {
-      if (insideFileDiff(add) || add.closest('[data-prune-ui]')) continue;
-      const del = nextElement(add);
+      // Cheapest test first: most matches are other green text, not a diffstat.
+      const del = add.nextElementSibling;
       if (!del || !DELETION_CLASS.test(del.getAttribute('class') ?? '')) continue;
+      if (insideFileDiff(add) || add.closest('[data-prune-ui]')) continue;
       const addNode = numberNode(add);
       const delNode = numberNode(del);
       if (!addNode || !delNode) continue;
@@ -181,6 +189,11 @@ export class CountPatcher {
           continue;
         }
         const text = node.nodeValue ?? '';
+        if (CAPPED_COUNT.test(text)) {
+          // GitHub shows e.g. "5,000+" on huge PRs: nothing to patch, and nothing missing.
+          this.counterPatched = true;
+          continue;
+        }
         // Only bare counters like "38" or " (38)" — never labels.
         if (!/^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*[)\s]*$/.test(text)) continue;
         if (parseCount(text) !== original) continue;
@@ -222,10 +235,6 @@ export class CountPatcher {
     this.patchedNodes.add(node);
     if (patched !== original) node.nodeValue = patched;
   }
-}
-
-function nextElement(el: Element): Element | null {
-  return el.nextElementSibling;
 }
 
 /** The text node that holds the digits inside `el`. */

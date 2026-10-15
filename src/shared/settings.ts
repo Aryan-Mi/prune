@@ -85,10 +85,16 @@ export async function loadRemoteCache(): Promise<RemoteCache | null> {
 }
 
 /** Calls `listener` whenever settings or the remote rule cache change. */
-export function onConfigChanged(listener: () => void): void {
+export function onConfigChanged(listener: (remoteChanged: boolean) => void): void {
   ext.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && (SETTINGS_KEY in changes || REMOTE_KEY in changes)) listener();
+    if (area === 'local' && (SETTINGS_KEY in changes || REMOTE_KEY in changes)) listener(REMOTE_KEY in changes);
   });
+}
+
+/** The settings that decide which files are pruned. */
+export function rulesKey(settings: Settings): string {
+  const { disabledGroups, userPatterns, useRepoConfig, respectLinguistGenerated, remoteUrl } = settings;
+  return JSON.stringify([disabledGroups, userPatterns, useRepoConfig, respectLinguistGenerated, remoteUrl]);
 }
 
 export function isRepoDisabled(settings: Settings, repo: string): boolean {

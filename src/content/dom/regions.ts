@@ -1,4 +1,4 @@
-import type { PrFileList } from '../github.ts';
+import type { PruneResult } from '../../shared/prune.ts';
 
 /**
  * On a big "Files changed" tab, the diff list and the file tree are nearly the
@@ -14,14 +14,26 @@ export class BulkRegions {
   private tree: Element | null = null;
 
   /** The diff list and file tree that are on the page. Cheap once found. */
-  find(files: PrFileList): Element[] {
-    if (!this.list?.isConnected) this.list = firstDiff(files);
+  find(result: PruneResult): Element[] {
+    if (!this.list?.isConnected) this.list = firstDiff(result);
     if (this.list) this.list = growList(this.list);
-    if (!this.tree?.isConnected) this.tree = findTree(files);
+    if (!this.tree?.isConnected) this.tree = findTree(result);
     const regions: Element[] = [];
     if (this.list) regions.push(this.list);
     if (this.tree && !this.tree.contains(this.list)) regions.push(this.tree);
     return regions;
+  }
+
+  /**
+   * The element whose children are the file diffs, as of the last `find()`:
+   * the diff list without the wrappers it may be the only child of.
+   */
+  diffList(): Element | null {
+    let list = this.list;
+    if (!list?.isConnected) return null;
+    if (FILE_DIFF_ID.test(list.id)) return list.parentElement;
+    while (list.childElementCount === 1 && !FILE_DIFF_ID.test(list.firstElementChild!.id)) list = list.firstElementChild!;
+    return list;
   }
 
   reset(): void {
@@ -30,12 +42,20 @@ export class BulkRegions {
   }
 }
 
-function firstDiff(files: PrFileList): Element | null {
-  for (let i = 0; i < files.length; i++) {
-    const diff = document.getElementById(`diff-${files.digest(i)}`);
+/** Some file diff on the page: by id when possible, else the first one in the document. */
+function firstDiff(result: PruneResult): Element | null {
+  for (const digest of result.probes) {
+    const diff = document.getElementById(`diff-${digest}`);
     if (diff) return diff;
   }
-  return null;
+  for (const file of result.pruned) {
+    const diff = document.getElementById(`diff-${file.digest}`);
+    if (diff) return diff;
+  }
+  // Other `diff-` ids (like a wrapper's) come before the diffs they contain.
+  let el = document.querySelector('[id^="diff-"]');
+  while (el && !FILE_DIFF_ID.test(el.id)) el = el.querySelector('[id^="diff-"]');
+  return el;
 }
 
 /**
@@ -65,10 +85,10 @@ function holdsDiff(el: Element): boolean {
 }
 
 /** The file tree: rows are `#file-tree-item-diff-<digest>` (classic UI) or have the path as id (new UI). */
-function findTree(files: PrFileList): Element | null {
-  if (files.length === 0) return null;
+function findTree(result: PruneResult): Element | null {
+  if (!result.firstPath) return null;
   const item =
-    document.getElementById(`file-tree-item-diff-${files.digest(0)}`) ?? document.getElementById(files.path(0));
+    document.getElementById(`file-tree-item-diff-${result.probes[0]}`) ?? document.getElementById(result.firstPath);
   return item?.matches('[role="treeitem"]') ? item.closest('[role="tree"]') : null;
 }
 

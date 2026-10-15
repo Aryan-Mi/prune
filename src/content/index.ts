@@ -1,36 +1,18 @@
 import { ext } from '../shared/browser.ts';
 import type { Message, TabStatus } from '../shared/messages.ts';
-import { compileRules, type CompiledRules } from '../shared/rules.ts';
-import {
-  isRepoDisabled,
-  loadRemoteCache,
-  loadSettings,
-  onConfigChanged,
-  REMOTE_TTL_MS,
-  type RemoteCache,
-  type Settings,
-} from '../shared/settings.ts';
+import type { PrFile, PrTotals } from '../shared/filetree.ts';
+import type { PruneResult } from '../shared/prune.ts';
+import { isRepoDisabled, loadSettings, onConfigChanged, rulesKey, type Settings } from '../shared/settings.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
-import {
-  fetchPrFiles,
-  fetchPrTotals,
-  fetchRepoConfig,
-  parsePrUrl,
-  type PrFile,
-  type PrFileList,
-  type PrRef,
-  type PrTotals,
-  type RepoConfig,
-} from './github.ts';
-import { computePrune, type PruneResult } from './prune.ts';
+import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef, type RepoConfig } from './github.ts';
 import { Indicator } from './ui/indicator.ts';
 import { PrunedSection } from './ui/section.ts';
 import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
 
-/** PR data is reused across tab switches for this long before refetching. */
+/** A PR's result is reused across tab switches for this long before refetching. */
 const PR_DATA_TTL_MS = 60_000;
 const REPO_CONFIG_TTL_MS = 10 * 60_000;
 /** Minimum gap between DOM checks while the page is mutating. */
@@ -44,9 +26,14 @@ const INACTIVE_KEY = 'prune:inactive';
 interface PrData {
   /** The PR this data belongs to. */
   key: string;
-  files: PrFileList;
+  result: PruneResult;
+  repoConfigPath: string | null;
+}
+
+/** GitHub's responses for a PR, on their way to the background script. */
+interface PrResponses {
+  fileTree: string;
   totals: Partial<PrTotals>;
-  repoConfig: RepoConfig;
 }
 
 interface CacheEntry<T> {
@@ -59,17 +46,16 @@ class Controller implements UiActions {
   private settings!: Settings;
   private configured = false;
   private configuring = false;
-  private remote: RemoteCache | null = null;
   private pr: PrRef | null = null;
   private href = '';
 
   private status: ViewStatus = 'loading';
   private error: string | undefined;
   private data: PrData | null = null;
-  private compiled: CompiledRules | null = null;
-  private result: PruneResult | null = null;
 
-  private readonly prCache = new Map<string, CacheEntry<Pick<PrData, 'files' | 'totals'>>>();
+  private readonly prCache = new Map<string, CacheEntry<PrData>>();
+  /** Responses fetched while settings were still loading. */
+  private prefetched: { key: string; promise: Promise<PrResponses> } | null = null;
   private readonly repoCache = new Map<string, CacheEntry<RepoConfig>>();
   private readonly revealed = new Map<string, Set<string>>();
   /** PRs switched off in this tab; read from sessionStorage on first use (it costs ~1 ms). */
@@ -117,6 +103,7 @@ class Controller implements UiActions {
       if (document.visibilityState === 'visible') this.scheduleCheck();
     });
     document.addEventListener('turbo:load', () => this.scheduleCheck());
+    window.addEventListener('load', () => this.scheduleCheck());
     (globalThis as { navigation?: EventTarget }).navigation?.addEventListener('navigatesuccess', () =>
       this.scheduleCheck(),
     );
@@ -127,22 +114,19 @@ class Controller implements UiActions {
   private configure(): void {
     if (this.configuring) return;
     this.configuring = true;
-    Promise.all([loadSettings(), loadRemoteCache()])
-      .then(([settings, remote]) => {
+    loadSettings()
+      .then((settings) => {
         this.settings = settings;
-        this.remote = remote;
         this.configured = true;
-        this.maybeRefreshRemote();
-        onConfigChanged(async () => {
-          const hadRepoConfig = this.settings.useRepoConfig;
-          [this.settings, this.remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
-          if (this.pr && this.settings.useRepoConfig && !hadRepoConfig) {
-            // Repo rules were off, so they were never fetched for this PR.
-            this.repoCache.delete(this.pr.repoKey);
-            this.load(this.pr);
+        onConfigChanged(async (remoteChanged) => {
+          const rules = rulesKey(this.settings);
+          this.settings = await loadSettings();
+          if (remoteChanged || rulesKey(this.settings) !== rules) {
+            // Results are only kept for the pruned files, so prune again from scratch.
+            this.prCache.clear();
+            if (this.pr) this.load(this.pr);
             return;
           }
-          this.recompute();
           this.render();
         });
         this.href = '';
@@ -216,8 +200,9 @@ class Controller implements UiActions {
   private onLocationChange(): void {
     const pr = parsePrUrl(location.pathname);
     if (pr && !this.configured) {
-      // The file list doesn't depend on settings: fetch it while they load.
-      this.prData(pr);
+      // GitHub's responses don't depend on settings: fetch them while they load.
+      this.prefetched = { key: pr.key, promise: this.fetchPr(pr) };
+      this.prefetched.promise.catch(() => {});
       this.configure();
       return;
     }
@@ -252,22 +237,15 @@ class Controller implements UiActions {
     if (this.data?.key !== pr.key) {
       this.status = 'loading';
       this.data = null;
-      this.result = null;
     }
     this.render();
 
-    Promise.all([this.prData(pr), this.repoConfig(pr)])
-      .then(async ([prData, repoConfig]) => {
-        // Matching and DOM work each get their own task, apart from parsing
-        // the file list, so that no single task gets long on a huge PR.
-        await nextTask();
+    this.prData(pr)
+      .then((data) => {
         if (token !== this.loadToken) return;
-        this.data = { key: pr.key, ...prData, repoConfig };
+        this.data = data;
         this.status = 'ready';
         this.error = undefined;
-        this.recompute();
-        await nextTask();
-        if (token !== this.loadToken) return;
         this.revealFromHash();
         this.render();
       })
@@ -279,14 +257,33 @@ class Controller implements UiActions {
       });
   }
 
-  private prData(pr: PrRef): Promise<Pick<PrData, 'files' | 'totals'>> {
+  /**
+   * Fetches the PR's file list here (same-origin, so private repos work) and
+   * has the background script parse and prune it. On a 3000-file PR that is a
+   * 700 KB JSON response; the page never parses it or keeps any of it, and
+   * gets back only the pruned files.
+   */
+  private prData(pr: PrRef): Promise<PrData> {
     let entry = this.prCache.get(pr.key);
     if (!entry || Date.now() - entry.at > PR_DATA_TTL_MS) {
-      const promise = Promise.all([fetchPrFiles(pr), fetchPrTotals(pr)]).then(([files, totals]) => ({ files, totals }));
+      const prefetched = this.prefetched?.key === pr.key ? this.prefetched.promise : null;
+      this.prefetched = null;
+      const promise = Promise.all([prefetched ?? this.fetchPr(pr), this.repoConfig(pr)]).then(
+        ([{ fileTree, totals }, repo]) =>
+          sendMessage<PruneResult>({ type: 'prune', fileTree, totals, repoText: repo.text, repoPath: repo.path }).then(
+            (result) => ({ key: pr.key, result, repoConfigPath: repo.path }),
+          ),
+      );
       entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
       promise.catch(() => this.prCache.delete(pr.key));
     }
     return entry.promise;
+  }
+
+  private fetchPr(pr: PrRef): Promise<PrResponses> {
+    // A Chromium service worker may need waking up; do it while GitHub responds.
+    sendMessage({ type: 'warm' }).catch(() => {});
+    return Promise.all([fetchFileTree(pr), fetchPrTotals(pr)]).then(([fileTree, totals]) => ({ fileTree, totals }));
   }
 
   private repoConfig(pr: PrRef): Promise<RepoConfig> {
@@ -299,25 +296,11 @@ class Controller implements UiActions {
     return entry.promise;
   }
 
-  private maybeRefreshRemote(): void {
-    const { remoteUrl } = this.settings;
-    if (!remoteUrl) return;
-    const stale = !this.remote || this.remote.url !== remoteUrl || Date.now() - this.remote.fetchedAt > REMOTE_TTL_MS;
-    if (stale) ext.runtime.sendMessage({ type: 'refresh-remote' } satisfies Message).catch(() => {});
-  }
-
-  private recompute(): void {
-    if (!this.data) return;
-    const remoteText = this.remote && this.remote.url === this.settings.remoteUrl ? this.remote.text : null;
-    this.compiled = compileRules(this.settings, {
-      repoText: this.data.repoConfig.text,
-      repoPath: this.data.repoConfig.path,
-      remoteText,
-    });
-    this.result = computePrune(this.data.files, this.data.totals, this.compiled, this.settings);
-  }
-
   // ---- Rendering --------------------------------------------------------
+
+  private get result(): PruneResult | null {
+    return this.data?.result ?? null;
+  }
 
   private isEnabledHere(): boolean {
     return !!this.pr && this.settings.enabled && !isRepoDisabled(this.settings, this.pr.repoKey);
@@ -351,7 +334,7 @@ class Controller implements UiActions {
       error: this.error,
       result: this.result,
       active: this.isActive(),
-      sources: this.compiled?.sources ?? [],
+      sources: this.result?.sources ?? [],
       revealed: this.revealedSet(),
       isDiffView: this.pr?.isDiffView ?? false,
     };
@@ -435,24 +418,13 @@ class Controller implements UiActions {
 
   /** Parts of a diff page that hold no header counters, so scans can skip them. */
   private bulk(): Element[] {
-    return this.pr?.isDiffView && this.data ? this.regions.find(this.data.files) : [];
+    return this.pr?.isDiffView && this.result ? this.regions.find(this.result) : [];
   }
 
-  /** The closest common ancestor of the first and last file diff on the page. */
+  /** The element whose children are the file diffs. */
   private findDiffListContainer(): Element | null {
-    const files = this.data?.files;
-    if (!files || files.length === 0) return null;
-    let first: Element | null = null;
-    let last: Element | null = null;
-    for (let i = 0; i < files.length && !first; i++) first = document.getElementById(`diff-${files.digest(i)}`);
-    if (!first) return null;
-    for (let i = files.length - 1; i >= 0 && !last; i--) last = document.getElementById(`diff-${files.digest(i)}`);
-    if (!last) return null;
-    if (first === last) return first.parentElement;
-    const ancestors = new Set<Element>();
-    for (let n: Element | null = first; n; n = n.parentElement) ancestors.add(n);
-    for (let n: Element | null = last; n; n = n.parentElement) if (ancestors.has(n)) return n;
-    return null;
+    this.bulk();
+    return this.regions.diffList();
   }
 
   private teardown(): void {
@@ -474,8 +446,7 @@ class Controller implements UiActions {
     this.section = null;
     this.sectionContainer = null;
     this.data = null;
-    this.compiled = null;
-    this.result = null;
+    this.prefetched = null;
     this.status = 'loading';
     this.error = undefined;
   }
@@ -483,7 +454,7 @@ class Controller implements UiActions {
   /** Visiting `#diff-<digest>` of a pruned file (e.g. from a link) reveals it. */
   private revealFromHash(): void {
     const m = /^#diff-([0-9a-f]{64})/.exec(location.hash);
-    if (m && this.result?.prunedDigests.has(m[1]!)) this.revealedSet().add(m[1]!);
+    if (m && this.result?.pruned.some((f) => f.digest === m[1])) this.revealedSet().add(m[1]!);
   }
 
   // ---- UiActions --------------------------------------------------------
@@ -532,7 +503,7 @@ class Controller implements UiActions {
   }
 
   openSettings(): void {
-    ext.runtime.sendMessage({ type: 'open-options' } satisfies Message).catch(() => {});
+    sendMessage({ type: 'open-options' }).catch(() => {});
   }
 
   private tabStatus(): TabStatus {
@@ -547,8 +518,8 @@ class Controller implements UiActions {
       pruned: this.result?.pruned.length ?? 0,
       original: this.result?.original,
       kept: this.result?.kept,
-      sources: this.compiled?.sources ?? [],
-      repoConfigPath: this.data?.repoConfig.path ?? null,
+      sources: this.result?.sources ?? [],
+      repoConfigPath: this.data?.repoConfigPath ?? null,
     };
   }
 }
@@ -571,9 +542,11 @@ function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
 }
 
-/** Resolves in a later task, letting the page handle input and render in between. */
-function nextTask(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve));
+/** Messages the background script; it replies `{ error }` when something failed. */
+async function sendMessage<T = unknown>(msg: Message): Promise<T> {
+  const reply = (await ext.runtime.sendMessage(msg)) as T | { error: string } | undefined;
+  if (reply && typeof reply === 'object' && 'error' in reply) throw new Error(reply.error);
+  return reply as T;
 }
 
 function filesTabPath(pr: PrRef): string {

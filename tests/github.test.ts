@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { parsePrUrl, PrFileList } from '../src/content/github.ts';
+import { parsePrUrl } from '../src/content/github.ts';
+import { PrFileList } from '../src/shared/filetree.ts';
 
 test('parses PR URLs on every tab', () => {
   expect(parsePrUrl('/vitejs/vite/pull/23648')).toMatchObject({

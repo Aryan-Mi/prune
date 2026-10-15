@@ -1,6 +1,6 @@
-import type { CompiledRules } from '../shared/rules.ts';
-import type { Settings } from '../shared/settings.ts';
-import type { PrFile, PrFileList, PrTotals } from './github.ts';
+import { parseFileTree, type PrFile, type PrFileList, type PrTotals } from './filetree.ts';
+import { compileRules, type CompiledRules, type RuleInputs } from './rules.ts';
+import type { Settings } from './settings.ts';
 
 export interface PrunedFile extends PrFile {
   /** The pattern that matched, or "linguist-generated". */
@@ -9,11 +9,15 @@ export interface PrunedFile extends PrFile {
   source: string;
 }
 
+/**
+ * Everything the content script needs about a PR, computed in the background
+ * script and sent over as plain JSON. It holds the pruned files only, never
+ * the whole file list.
+ */
 export interface PruneResult {
   /** How many files GitHub listed (it stops at 3000). */
   listed: number;
   pruned: PrunedFile[];
-  prunedDigests: Set<string>;
   /** Directories that contain only pruned files. */
   prunedDirs: string[];
   /** Totals as GitHub reports them. */
@@ -22,6 +26,25 @@ export interface PruneResult {
   kept: PrTotals;
   /** Totals of the pruned files alone. */
   removed: PrTotals;
+  /** Active rule sources, in precedence order. */
+  sources: string[];
+  /** Digests of the first and last few files, to find the diff list on the page. */
+  probes: string[];
+  /** Path of the first file, to find the new UI's file tree (its rows have the path as id). */
+  firstPath: string | null;
+}
+
+/** How many digests from each end of the list go into `probes`. */
+const PROBES = 16;
+
+/** Parses GitHub's file_tree response and prunes it. Runs in the background script. */
+export function prunePr(
+  fileTree: string,
+  githubTotals: Partial<PrTotals>,
+  settings: Settings,
+  inputs: RuleInputs,
+): PruneResult {
+  return computePrune(parseFileTree(fileTree), githubTotals, compileRules(settings, inputs), settings);
 }
 
 export function computePrune(
@@ -72,14 +95,22 @@ export function computePrune(
     files: Math.max(0, original.files - removed.files),
   };
 
+  const probes: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    if (i === PROBES) i = Math.max(i, files.length - PROBES);
+    probes.push(files.digest(i));
+  }
+
   return {
     listed: files.length,
     pruned,
-    prunedDigests: new Set(pruned.map((f) => f.digest)),
     prunedDirs: pruned.length > 0 ? fullyPrunedDirs(files, isPruned) : [],
     original,
     kept,
     removed,
+    sources: compiled.sources,
+    probes,
+    firstPath: files.length > 0 ? files.path(0) : null,
   };
 }
 

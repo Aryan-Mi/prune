@@ -1,5 +1,5 @@
 import type { DiffMode, TreeMode } from '../../shared/settings.ts';
-import type { PruneResult } from '../prune.ts';
+import type { PruneResult } from '../../shared/prune.ts';
 
 /**
  * All per-file hiding is done with a single generated stylesheet keyed on the

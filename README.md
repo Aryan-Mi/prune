@@ -79,12 +79,14 @@ The file tree can either hide or dim pruned files.
 Performance was a design constraint from the start:
 
 - **No diff downloading or parsing.** PRune reads `/{owner}/{repo}/pull/{n}/page_data/file_tree`, the same-origin JSON endpoint GitHub's own UI uses. It returns every file's path, line stats and `sha256(path)` digest in one request (~250 bytes per file) and works on private repos with your session. No API token is needed.
+- **The heavy lifting happens off the page.** The content script fetches that response (it has to, for your session) and hands the text straight to the extension's background script, which parses it and runs the rules. Only the pruned files come back. On a 3,000-file PR the page never parses the 700 KB response, never holds the file list, and doesn't even load the rule matcher.
 - **Hiding is one stylesheet.** GitHub gives every file diff the DOM id `diff-<sha256(path)>`, in both the classic and the new React "Files changed" UI. PRune injects a single `<style>` with rules for those ids, and the browser applies it to diffs as they stream in, lazy-load or re-render. There's no per-file JavaScript and no node is ever moved, so React's tree is never disturbed.
 - **Counts are patched in place.** The header's text nodes get their `nodeValue` rewritten (never replaced), found by matching the exact totals GitHub reports. If React re-renders, PRune notices and re-applies.
 - **One cheap observer.** A single `MutationObserver` only schedules a check, and pauses until it has run. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows). Looking for the header counters skips the diff list and file tree, which on a big PR are nearly the whole page.
-- **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~3 ms.
+- **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~1.5 ms, in the background script.
+- **Lazy UI.** The popover's file list is built on first open, and the "Pruned files" rows when the section scrolls near the viewport.
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 15 ms of main-thread time in total on the conversation tab and 25 ms on the Files changed tab, with the largest single task at 5–8 ms (`node bench/live.ts`).
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 8 ms of the page's main-thread time in total on the conversation tab and 12 ms on the Files changed tab, no single task longer than ~3 ms, and keeps ~120–170 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~1 ms and ~55 KB. The background script's share (parsing and matching, ~4 ms) runs in the extension's own process, and the file list is dropped as soon as it's done.
 
 ## Development
 
@@ -97,17 +99,20 @@ bun run test:e2e        # live smoke test on github.com in Chromium (Playwright)
 bun run lint:firefox    # Mozilla's add-on linter
 bun run package         # dist/prune-{firefox,chrome}-<version>.zip
 bun scripts/icons.ts    # regenerate PNG icons from assets/icon.svg
+bun run bench           # main-thread CPU + page memory on live PRs (Chromium)
+bun run bench:memory    # what the page keeps for a 3000-file PR (offline)
+bun run bench:latency   # time until the pruned numbers show up
 ```
 
 ```
 src/
-  shared/      settings, defaults, .gitignore matcher, rule layering
+  shared/      settings, defaults, .gitignore matcher, rule layering,
+               file_tree parsing + which files are pruned (run in background/)
   content/     the GitHub content script
     github.ts  URL parsing + GitHub data endpoints
-    prune.ts   which files are pruned, new totals
     dom/       stylesheet hiding, header count patching, collapse mode
     ui/        the ✂ pill + popover, the "Pruned files" section (Shadow DOM)
-  background/  fetches the remote rules file
+  background/  parses + prunes file lists for the content script; fetches the remote rules file
   popup/       toolbar popup
   options/     settings page
 scripts/       build + icon generation

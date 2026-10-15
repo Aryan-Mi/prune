@@ -262,19 +262,24 @@ export class Indicator {
         frag.append(el('div', 'empty', 'No files in this pull request match your prune rules.'));
       } else {
         const list = el('ul', 'list');
-        for (const file of result.pruned) {
+        result.pruned.forEach((file, i) => {
           const li = el('li');
           const row = el('button', 'row');
           row.type = 'button';
+          row.dataset.i = String(i);
           row.title = `${file.path}\nMatched “${file.rule}” · ${file.source}\nClick to view the diff`;
           row.append(pathElement(file.path), statElement(file.additions, file.deletions), whyElement(file));
-          row.addEventListener('click', () => {
-            this.close();
-            this.actions.goToFile(file);
-          });
           li.append(row);
           list.append(li);
-        }
+        });
+        // One listener for all rows.
+        list.addEventListener('click', (e) => {
+          const i = (e.target as Element).closest<HTMLElement>('button[data-i]')?.dataset.i;
+          const file = i === undefined ? undefined : result.pruned[Number(i)];
+          if (!file) return;
+          this.close();
+          this.actions.goToFile(file);
+        });
         frag.append(list);
       }
     }
