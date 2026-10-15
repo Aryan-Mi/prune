@@ -52,7 +52,10 @@ interface CacheEntry<T> {
 }
 
 class Controller implements UiActions {
+  /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
   private settings!: Settings;
+  private configured = false;
+  private configuring = false;
   private remote: RemoteCache | null = null;
   private pr: PrRef | null = null;
   private href = '';
@@ -72,8 +75,9 @@ class Controller implements UiActions {
   private readonly styles = new PruneStyles();
   private readonly counts = new CountPatcher();
   private readonly collapser = new Collapser();
-  private readonly indicator = new Indicator(this);
-  private readonly section = new PrunedSection(this);
+  // Created on the first PR page, dropped when leaving PR pages.
+  private indicator: Indicator | null = null;
+  private section: PrunedSection | null = null;
   private sectionContainer: Element | null = null;
 
   private checkTimer = 0;
@@ -82,21 +86,7 @@ class Controller implements UiActions {
   private lastRescan = 0;
   private lastLocate = 0;
 
-  async start(): Promise<void> {
-    [this.settings, this.remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
-    this.maybeRefreshRemote();
-    onConfigChanged(async () => {
-      const hadRepoConfig = this.settings.useRepoConfig;
-      [this.settings, this.remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
-      if (this.pr && this.settings.useRepoConfig && !hadRepoConfig) {
-        // Repo rules were off, so they were never fetched for this PR.
-        this.repoCache.delete(this.pr.repoKey);
-        this.load(this.pr);
-        return;
-      }
-      this.recompute();
-      this.render();
-    });
+  start(): void {
     ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       if (msg.type === 'get-status') {
         sendResponse(this.tabStatus());
@@ -108,8 +98,9 @@ class Controller implements UiActions {
     });
 
     // One observer for the whole page; the callback only schedules a check, so
-    // its cost is constant no matter how many nodes GitHub adds.
-    new MutationObserver(() => this.scheduleCheck()).observe(document.documentElement, {
+    // its cost is constant no matter how many nodes GitHub adds. It observes
+    // the document itself: at document_start <html> may not exist yet.
+    new MutationObserver(() => this.scheduleCheck()).observe(document, {
       childList: true,
       subtree: true,
     });
@@ -127,6 +118,34 @@ class Controller implements UiActions {
       this.scheduleCheck(),
     );
     this.check();
+  }
+
+  /** Loads settings once, then handles the current page again. */
+  private configure(): void {
+    if (this.configuring) return;
+    this.configuring = true;
+    Promise.all([loadSettings(), loadRemoteCache()])
+      .then(([settings, remote]) => {
+        this.settings = settings;
+        this.remote = remote;
+        this.configured = true;
+        this.maybeRefreshRemote();
+        onConfigChanged(async () => {
+          const hadRepoConfig = this.settings.useRepoConfig;
+          [this.settings, this.remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
+          if (this.pr && this.settings.useRepoConfig && !hadRepoConfig) {
+            // Repo rules were off, so they were never fetched for this PR.
+            this.repoCache.delete(this.pr.repoKey);
+            this.load(this.pr);
+            return;
+          }
+          this.recompute();
+          this.render();
+        });
+        this.href = '';
+        this.check();
+      })
+      .catch((err: unknown) => console.error('[PRune]', err));
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -178,10 +197,15 @@ class Controller implements UiActions {
 
   private onLocationChange(): void {
     const pr = parsePrUrl(location.pathname);
+    if (pr && !this.configured) {
+      this.configure();
+      return;
+    }
     const prev = this.pr;
     this.pr = pr;
     if (!pr) {
       this.teardown();
+      this.release();
       return;
     }
     if (prev?.key !== pr.key) {
@@ -213,8 +237,7 @@ class Controller implements UiActions {
     let entry = this.prCache.get(pr.key);
     if (!entry || Date.now() - entry.at > PR_DATA_TTL_MS) {
       const promise = Promise.all([fetchPrFiles(pr), fetchPrTotals(pr)]).then(([files, totals]) => ({ files, totals }));
-      entry = { promise, at: Date.now() };
-      this.prCache.set(pr.key, entry);
+      entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
       promise.catch(() => this.prCache.delete(pr.key));
     }
 
@@ -241,8 +264,7 @@ class Controller implements UiActions {
     let entry = this.repoCache.get(pr.repoKey);
     if (!entry || Date.now() - entry.at > REPO_CONFIG_TTL_MS) {
       const promise = fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }));
-      entry = { promise, at: Date.now() };
-      this.repoCache.set(pr.repoKey, entry);
+      entry = cache(this.repoCache, pr.repoKey, promise, REPO_CONFIG_TTL_MS);
     }
     return entry.promise;
   }
@@ -327,8 +349,8 @@ class Controller implements UiActions {
     }
     this.lastLocate = 0;
     const state = this.viewState();
-    this.indicator.render(state);
-    if (this.wantsSection()) this.section.render(state);
+    (this.indicator ??= new Indicator(this)).render(state);
+    if (this.wantsSection()) (this.section ??= new PrunedSection(this)).render(state);
     this.mountUi();
   }
 
@@ -343,7 +365,8 @@ class Controller implements UiActions {
   }
 
   private mountUi(fromMutation = false): void {
-    if (!document.body) return;
+    const indicator = this.indicator;
+    if (!document.body || !indicator) return;
     let anchor = this.counts.diffstatAnchor;
     // While pruning, applyCounts() discovers the diffstat; locate() is only for
     // finding where to put the pill when there is nothing to patch.
@@ -358,13 +381,13 @@ class Controller implements UiActions {
     }
     anchor ??= findDiffstatFallback();
     // Avoid a floating pill flashing while the header is still rendering.
-    if (anchor || this.status !== 'loading') this.indicator.mount(anchor);
-    else this.indicator.unmount();
-    if (this.wantsSection()) {
+    if (anchor || this.status !== 'loading') indicator.mount(anchor);
+    else indicator.unmount();
+    if (this.section && this.wantsSection()) {
       if (!this.sectionContainer?.isConnected) this.sectionContainer = this.findDiffListContainer();
       if (this.sectionContainer) this.section.mount(this.sectionContainer);
     } else {
-      this.section.unmount();
+      this.section?.unmount();
     }
   }
 
@@ -388,8 +411,25 @@ class Controller implements UiActions {
     this.styles.clear();
     this.counts.restore();
     this.collapser.restore();
-    this.indicator.unmount();
-    this.section.unmount();
+    this.indicator?.unmount();
+    this.section?.unmount();
+  }
+
+  /**
+   * Left PR pages: drops the UI and this PR's data, so browsing the rest of
+   * GitHub costs next to nothing. Recently fetched data stays in prCache until
+   * it expires, so coming straight back doesn't refetch.
+   */
+  private release(): void {
+    this.loadToken++;
+    this.indicator = null;
+    this.section = null;
+    this.sectionContainer = null;
+    this.data = null;
+    this.compiled = null;
+    this.result = null;
+    this.status = 'loading';
+    this.error = undefined;
   }
 
   /** Visiting `#diff-<digest>` of a pruned file (e.g. from a link) reveals it. */
@@ -464,6 +504,19 @@ class Controller implements UiActions {
   }
 }
 
+/**
+ * Caches `promise` under `key`. Entries older than `ttl` are never read again,
+ * so they are dropped then instead of keeping a PR's file list for good.
+ */
+function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise<T>, ttl: number): CacheEntry<T> {
+  const entry = { promise, at: Date.now() };
+  map.set(key, entry);
+  setTimeout(() => {
+    if (map.get(key) === entry) map.delete(key);
+  }, ttl + 1000);
+  return entry;
+}
+
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
 function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
@@ -494,4 +547,4 @@ function writeInactive(keys: Set<string>): void {
   }
 }
 
-new Controller().start().catch((err: unknown) => console.error('[PRune]', err));
+new Controller().start();
