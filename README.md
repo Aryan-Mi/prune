@@ -87,9 +87,9 @@ Performance was a design constraint from the start:
 - **Almost nothing runs outside PRs.** The content script is only injected on PR pages. The rest of GitHub gets a ~500-byte loader that listens for GitHub's navigation events and imports the content script if you open a PR without a page load. Neither watches the DOM there.
 - **One cheap observer.** On a PR page, a single `MutationObserver` only schedules a check, and pauses until it has run. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows). A whole-page search skips the diff list and file tree, which on a big PR are nearly the whole page, and is made of single class or tag queries, which browsers answer from a fast path.
 - **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~1.5 ms, in the background script.
-- **Lazy UI.** Up front there is only the ✂ pill: a button, an icon and a short stylesheet. The popover and its styles are built on first open, and the "Pruned files" section is an empty placeholder until it scrolls near the viewport.
+- **Lazy UI, lazily loaded.** Up front there is only the ✂ pill: a button, an icon and a short stylesheet. The popover, the "Pruned files" section and collapse mode aren't even in the content script: each is a small module of its own that is imported the first time it's needed (the popover when the pointer reaches the pill, well within the hover delay; the section once its empty placeholder scrolls near the viewport; collapse mode when that setting is on). Most visits never load them, so every PR page compiles and keeps ~40% less script (26 KB instead of 44 KB, minified, with private member names shortened).
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 6–7 ms of the page's main-thread time in total on the conversation tab and 9–11 ms on the Files changed tab when the PR is reloaded or reopened (about 1.5 ms more the first time, to hand the file list over), no single task longer than ~3 ms, and keeps ~115–160 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms; ~2 ms for a stored list) runs in the extension's own process.
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 6–7 ms of the page's main-thread time in total on the conversation tab and 9–11 ms on the Files changed tab when the PR is reloaded or reopened (about 1.5 ms more the first time, to hand the file list over), no single task longer than ~3 ms, and keeps ~115–160 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms; ~2 ms for a stored list) runs in the extension's own process. On top of that, compiling the content script takes ~1 ms on the first PR page a tab's process shows (later ones reuse V8's compiled copy), and the page keeps its 26 KB of source and ~60 KB of bytecode and other compiled-code data, plus up to ~25 KB of optimized machine code for what runs often (`bun run bench:compile`).
 
 ## Development
 
@@ -105,6 +105,7 @@ bun scripts/icons.ts    # regenerate PNG icons from assets/icon.svg
 bun run bench           # main-thread CPU + page memory on live PRs (Chromium)
 bun run bench:memory    # what the page keeps for a 3000-file PR (offline)
 bun run bench:latency   # time until the pruned numbers show up
+bun run bench:compile   # compile time + code memory of PRune's scripts in the page
 ```
 
 ```
@@ -113,10 +114,12 @@ src/
                file_tree parsing + which files are pruned (run in background/)
   content/     the GitHub content script (PR pages)
     loader.ts  the one for other GitHub pages: loads the content script on soft navigation to a PR
+    chunks.ts  imports the parts below that are only loaded when needed
     route.ts   PR URLs + following GitHub's navigation
     github.ts  URL parsing + GitHub data endpoints
     dom/       stylesheet hiding, header count patching, collapse mode
-    ui/        the ✂ pill + popover, the "Pruned files" section (Shadow DOM)
+    ui/        the ✂ pill + popover, the "Pruned files" section (Shadow DOM);
+               popover.ts, section-box.ts and dom/collapse.ts are chunks of their own
   background/  parses + prunes file lists for the content script, keeps them by ETag;
                settings + per-tab state for PR tabs; fetches the remote rules file
   popup/       toolbar popup
