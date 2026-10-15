@@ -4,10 +4,13 @@
  * extension's service worker starts cold, as on a first PR visit.
  *
  *   node bench/latency.ts [--runs=5] [--extension=dist/chrome] [--pr=<url>]
+ *     [--from=<url>]
  *
  * "after data" is from the last of PRune's GitHub requests (file_tree,
  * diffstat, tab_counts) finishing to the ✂ pill switching on; "after
- * navigation" is from the start of the navigation.
+ * navigation" is from the start of the navigation. With --from, the PR is
+ * opened from that page by GitHub's soft navigation (a link click) instead of
+ * a page load.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +23,7 @@ const root = join(import.meta.dirname, '..');
 const extensionPath = resolve(root, arg('extension', 'dist/chrome'));
 const runs = Number(arg('runs', '5'));
 const pr = arg('pr', 'https://github.com/nodejs/node/pull/65161');
+const from = arg('from', '');
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[xs.length >> 1]!;
 const afterData: number[] = [];
@@ -38,8 +42,18 @@ for (let run = 0; run < runs; run++) {
     page.on('requestfinished', (req) => {
       if (/\/page_data\/(file_tree|diffstat|tab_counts)$/.test(req.url())) dataAt = Date.now();
     });
+    if (from) await page.goto(from, { waitUntil: 'load' });
     const start = Date.now();
-    await page.goto(pr, { waitUntil: 'commit' });
+    if (from) {
+      await page.evaluate((href) => {
+        const link = document.createElement('a');
+        link.href = href;
+        document.body.append(link);
+        link.click();
+      }, new URL(pr).pathname);
+    } else {
+      await page.goto(pr, { waitUntil: 'commit' });
+    }
     await page.waitForFunction(
       () =>
         document

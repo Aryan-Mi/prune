@@ -2,13 +2,15 @@
  * Live performance + memory benchmark of the content script on real GitHub
  * PRs, in Chromium with the extension loaded. Nothing in the extension is
  * instrumented: CPU comes from the V8 sampling profiler (every sample whose
- * stack contains a content.js frame, at 50µs resolution), memory from the V8
- * sampling heap profiler (live objects allocated under content.js frames).
+ * stack contains a content script frame, at 50µs resolution), memory from the
+ * V8 sampling heap profiler (live objects allocated under content script
+ * frames). "Content script" is any script of the extension running in the page
+ * (content.js and loader.js).
  *
  *   bun run build:chrome && node bench/live.ts [--runs=5] [--json=out.json]
  *     [--only=<scenario regex>] [--breakdown] [--extension=dist/chrome]
  *
- * --breakdown prints where the time went (per content.js function, self time
+ * --breakdown prints where the time went (per content script function, self time
  * including native/GC work it triggered, averaged over runs) and where the
  * live heap was allocated.
  */
@@ -26,13 +28,23 @@ const JSON_OUT = arg('json', '');
 const ONLY = new RegExp(arg('only', ''), 'i');
 const BREAKDOWN = process.argv.includes('--breakdown');
 
-const SCENARIOS = [
+interface Scenario {
+  name: string;
+  url: string;
+  idle?: boolean;
+  /** Path to soft-navigate to once `url` has loaded, as if following a link. */
+  softNav?: string;
+}
+
+const SCENARIOS: Scenario[] = [
   { name: 'huge PR · conversation', url: 'https://github.com/nodejs/node/pull/65161' },
   { name: 'huge PR · files', url: 'https://github.com/nodejs/node/pull/65161/files' },
   { name: 'small PR · conversation', url: 'https://github.com/vitejs/vite/pull/23648' },
   { name: 'small PR · files', url: 'https://github.com/vitejs/vite/pull/23648/files' },
-  // Not a PR: the content script still runs on every github.com page, so this is its idle cost.
+  // Not a PR: a content script still runs on every github.com page, so this is its idle cost.
   { name: 'non-PR page (repo home)', url: 'https://github.com/vitejs/vite', idle: true },
+  // Opening a PR from another GitHub page without a page load (GitHub's soft navigation).
+  { name: 'repo → small PR (soft nav)', url: 'https://github.com/vitejs/vite', softNav: '/vitejs/vite/pull/23648' },
 ];
 
 interface Sample {
@@ -40,9 +52,9 @@ interface Sample {
   maxTaskMs: number;
   tasks: number;
   heapKb: number;
-  /** Self time per content.js function (`name:line`), with native callees folded in. */
+  /** Self time per content script function (`file:name:line`), with native callees folded in. */
   functions: Map<string, number>;
-  /** Time per non-content.js leaf frame called from content.js (e.g. querySelectorAll, GC). */
+  /** Time per non-content-script leaf frame called from a content script (e.g. querySelectorAll, GC). */
   natives: Map<string, number>;
   /** Self time per function within the longest task. */
   longest: Map<string, number>;
@@ -61,12 +73,14 @@ interface CpuProfile {
   startTime: number;
 }
 
-const OUR_SCRIPT = /^chrome-extension:\/\/[^/]+\/content\.js$/;
+const OUR_SCRIPT = /^chrome-extension:\/\/[^/]+\/(content|loader)\.js$/;
+/** `loader:` for frames in loader.js, so functions of both scripts can be told apart. */
+const prefix = (url: string) => (url.endsWith('/loader.js') ? 'loader:' : '');
 const SAMPLE_US = 50;
 
 /**
  * Splits the CPU profile into contiguous runs of samples whose stack contains
- * a content.js frame. Each run is one stretch of main-thread time spent in
+ * a content script frame. Each run is one stretch of main-thread time spent in
  * PRune (task, microtask or observer callback).
  */
 function contentScriptTasks(
@@ -88,7 +102,7 @@ function contentScriptTasks(
     ours.set(id, value);
     return value;
   };
-  /** Nearest content.js frame at or above the node. */
+  /** Nearest content script frame at or above the node. */
   const ownFrame = (id: number): ProfileNode => {
     let node = byId.get(id)!;
     while (!OUR_SCRIPT.test(node.callFrame.url)) node = byId.get(parent.get(node.id)!)!;
@@ -113,7 +127,7 @@ function contentScriptTasks(
     if (!isOurs(profile.samples[i]!)) continue;
     const dt = Math.min(profile.timeDeltas[i + 1] ?? SAMPLE_US, SAMPLE_US * 4);
     const own = ownFrame(profile.samples[i]!).callFrame;
-    const key = `${own.functionName || '(top level)'}:${own.lineNumber + 1}`;
+    const key = `${prefix(own.url)}${own.functionName || '(top level)'}:${own.lineNumber + 1}`;
     add(functions, key, dt / 1000);
     const leaf = byId.get(profile.samples[i]!)!.callFrame;
     if (!OUR_SCRIPT.test(leaf.url)) add(natives, `${leaf.functionName || '(anonymous)'} ← ${own.functionName || '(top level)'}`, dt / 1000);
@@ -138,13 +152,13 @@ interface HeapNode {
 }
 
 /**
- * Live bytes allocated under content.js frames. `sites` collects them by the
- * allocating frame: a content.js function, or a builtin plus its content.js caller.
+ * Live bytes allocated under content script frames. `sites` collects them by the
+ * allocating frame: a content script function, or a builtin plus its content script caller.
  */
 function heapBytes(node: HeapNode, sites: Map<string, number>, caller = ''): number {
   const { url, functionName, lineNumber } = node.callFrame;
   const isOurs = OUR_SCRIPT.test(url);
-  const name = `${functionName || '(anonymous)'}${isOurs ? `:${lineNumber + 1}` : ''}`;
+  const name = isOurs ? `${prefix(url)}${functionName || '(anonymous)'}:${lineNumber + 1}` : functionName || '(anonymous)';
   const inside = isOurs || caller !== '';
   let total = 0;
   if (inside && node.selfSize) {
@@ -156,13 +170,24 @@ function heapBytes(node: HeapNode, sites: Map<string, number>, caller = ''): num
   return total;
 }
 
-async function measure(page: Page, cdp: CDPSession, url: string, sites: Map<string, number>, idle = false): Promise<Sample> {
+async function measure(page: Page, cdp: CDPSession, scenario: Scenario, sites: Map<string, number>): Promise<Sample> {
+  const { url, idle, softNav } = scenario;
   await cdp.send('HeapProfiler.enable');
   await cdp.send('HeapProfiler.startSampling', { samplingInterval: 512 });
   await cdp.send('Profiler.enable');
   await cdp.send('Profiler.setSamplingInterval', { interval: SAMPLE_US });
   await cdp.send('Profiler.start');
   await page.goto(url, { waitUntil: 'load', timeout: 120_000 });
+  if (softNav) {
+    await page.waitForTimeout(1500);
+    await page.evaluate((href) => {
+      const link = document.createElement('a');
+      link.href = href;
+      document.body.append(link);
+      link.click();
+    }, softNav);
+    await page.waitForURL((u) => u.pathname === softNav, { timeout: 60_000 });
+  }
   // Let the page settle, then scroll through to trigger lazy/progressive loading.
   await page.waitForTimeout(3000);
   for (let i = 0; i < 8; i++) {
@@ -211,7 +236,7 @@ try {
   for (let r = 0; r < RUNS; r++) {
     for (const s of scenarios) {
       const sites = (allocationSites[s.name] ??= new Map());
-      (results[s.name] ??= []).push(await measure(page, cdp, s.url, sites, s.idle));
+      (results[s.name] ??= []).push(await measure(page, cdp, s, sites));
     }
   }
 } finally {
