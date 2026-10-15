@@ -85,7 +85,9 @@ function esbuildOptions(target: Target): esbuild.BuildOptions {
     // Readable output: easier to debug and to get through store review.
     minify: false,
     legalComments: 'none',
-    charset: 'utf8',
+    // Escape non-ASCII characters (− etc.): a single one makes the engine
+    // keep the whole script source as UTF-16, doubling its memory in every tab.
+    charset: 'ascii',
     logLevel: 'warning',
   };
 }
