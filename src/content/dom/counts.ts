@@ -39,10 +39,10 @@ export class CountPatcher {
   private patchedNodes = new WeakSet<Text>();
   private anchor: Element | null = null;
   /**
-   * The smallest element holding every counter found last time (on GitHub,
-   * a small part of the PR header). Searched first next time.
+   * The elements holding the counters found last time (diffstats and "Files
+   * changed" links: a few small parts of the PR header). Searched first next time.
    */
-  private scope: Element | null = null;
+  private holders: Element[] = [];
   /** The numbers last applied; when they change, the whole page is searched again. */
   private values = '';
 
@@ -79,8 +79,8 @@ export class CountPatcher {
    * Already-patched nodes are left alone, so calling this repeatedly is cheap
    * and causes no DOM writes when nothing new appeared.
    *
-   * Unless `full`, only the part of the header where the counters were found
-   * last time, or else where GitHub's ids say they are, is searched (a few
+   * Unless `full`, only the elements that held the counters last time, or
+   * else the ones GitHub's ids point to (`landmarks()`), are searched (a few
    * dozen elements), and the whole page only if something is missing there.
    * The whole page is searched without `bulk` (see regions.ts), which is
    * searched only if something is not found elsewhere. Returns whether the
@@ -90,16 +90,23 @@ export class CountPatcher {
     this.prune();
     const values = `${original.additions} ${original.deletions} ${original.files} ${kept.additions} ${kept.deletions} ${kept.files}`;
     if (values !== this.values) {
-      // Patches outside the scope need the new numbers too.
+      // Patches elsewhere need the new numbers too.
       if (this.texts.length > 0 || this.attrs.length > 0) full = true;
       this.values = values;
     }
     if (!full) {
-      for (const scope of [this.scope, landmarkScope()]) {
-        if (!scope?.isConnected) continue;
-        this.scan(basePath, original, kept, queryWithin(scope, DELETION_SELECTOR), queryWithin(scope, FILES_LINK_SELECTOR));
+      for (const scope of [this.holders, landmarks()]) {
+        const els = scope.filter((el) => el.isConnected);
+        if (els.length === 0) continue;
+        const found = this.scan(
+          basePath,
+          original,
+          kept,
+          els.flatMap((el) => queryWithin(el, DELETION_SELECTOR)),
+          els.flatMap((el) => queryWithin(el, FILES_LINK_SELECTOR)),
+        );
         if (this.diffstatPatched && this.counterPatched) {
-          this.scope = scope;
+          this.holders = found;
           return false;
         }
       }
@@ -126,7 +133,7 @@ export class CountPatcher {
       );
       this.bulkChecked = this.texts.length + this.attrs.length === patches;
     }
-    this.scope = commonAncestor(found);
+    this.holders = found;
     return true;
   }
 
@@ -153,7 +160,7 @@ export class CountPatcher {
     this.attrs = [];
     this.patchedNodes = new WeakSet();
     this.anchor = null;
-    this.scope = null;
+    this.holders = [];
     this.values = '';
     this.counterPatched = false;
     this.diffstatPatched = false;
@@ -163,7 +170,7 @@ export class CountPatcher {
 
   /** Forgets where the counters were (e.g. another tab of the PR is showing). */
   rescope(): void {
-    this.scope = null;
+    this.holders = [];
     this.counterMisses = 0;
   }
 
@@ -334,16 +341,22 @@ function findTabLinks(roots: readonly Element[]): Set<Element> {
 }
 
 /**
- * The part of the PR header holding its counters, by the ids GitHub gives
- * them: `#diffstat` and `#files_tab_counter` (classic UI), and the "Files
- * changed" tab `#prs-files-anchor-tab` (React header, whose diffstat is next
- * to the tabs). Free to look up; whatever it misses is searched for anyway.
+ * The parts of the PR header holding its counters, by the ids GitHub gives
+ * them: `#diffstat` and the "Files changed" link around `#files_tab_counter`
+ * (classic UI), and the navigation around the "Files changed" tab
+ * `#prs-files-anchor-tab` (React header, whose diffstat is next to the tabs).
+ * Free to look up; whatever they miss is searched for anyway. Each is small:
+ * their common ancestor can hold the whole diff list.
  */
-function landmarkScope(): Element | null {
+function landmarks(): Element[] {
+  const tab = document.getElementById('prs-files-anchor-tab');
+  const counter = document.getElementById('files_tab_counter');
+  const link = tab ? (tab.closest('[data-component="PH_Navigation"]') ?? tab) : (counter?.closest('a') ?? counter);
   const diffstat = document.getElementById('diffstat');
-  const link = document.getElementById('prs-files-anchor-tab') ?? document.getElementById('files_tab_counter');
-  if (diffstat && link) return commonAncestor([diffstat, link]);
-  return link?.closest('[data-component="PH_Navigation"]') ?? link?.closest('a') ?? diffstat;
+  const els: Element[] = [];
+  if (link) els.push(link);
+  if (diffstat && !link?.contains(diffstat)) els.push(diffstat);
+  return els;
 }
 
 /** `root` and its descendants that match `selector`, in document order. */
@@ -351,13 +364,6 @@ function queryWithin(root: Element, selector: string): Element[] {
   const found = [...root.querySelectorAll(selector)];
   if (root.matches(selector)) found.unshift(root);
   return found;
-}
-
-/** The deepest element containing all of `els`; null if that is <body> or above (no point scoping). */
-function commonAncestor(els: readonly Element[]): Element | null {
-  let common: Element | null = els[0] ?? null;
-  for (const el of els) while (common && !common.contains(el)) common = common.parentElement;
-  return common && common !== document.body && common !== document.documentElement ? common : null;
 }
 
 /** The text node that holds the digits inside `el`. */
