@@ -237,12 +237,17 @@ class Controller implements UiActions {
     }
 
     Promise.all([entry.promise, this.repoConfig(pr)])
-      .then(([prData, repoConfig]) => {
+      .then(async ([prData, repoConfig]) => {
+        // Matching and DOM work each get their own task, apart from parsing
+        // the file list, so that no single task gets long on a huge PR.
+        await nextTask();
         if (token !== this.loadToken) return;
         this.data = { ...prData, repoConfig };
         this.status = 'ready';
         this.error = undefined;
         this.recompute();
+        await nextTask();
+        if (token !== this.loadToken) return;
         this.revealFromHash();
         this.render();
       })
@@ -504,6 +509,11 @@ class Controller implements UiActions {
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
 function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
+}
+
+/** Resolves in a later task, letting the page handle input and render in between. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve));
 }
 
 function filesTabPath(pr: PrRef): string {
