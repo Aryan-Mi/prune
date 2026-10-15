@@ -12,6 +12,7 @@ import {
 } from '../shared/settings.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
+import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
 import {
   fetchPrFiles,
@@ -71,6 +72,7 @@ class Controller implements UiActions {
 
   private readonly styles = new PruneStyles();
   private readonly counts = new CountPatcher();
+  private readonly regions = new BulkRegions();
   private readonly collapser = new Collapser();
   private readonly indicator = new Indicator(this);
   private readonly section = new PrunedSection(this);
@@ -187,12 +189,14 @@ class Controller implements UiActions {
     if (prev?.key !== pr.key) {
       this.teardown();
       this.sectionContainer = null;
+      this.regions.reset();
       this.load(pr);
     } else {
       // Same PR, different tab: refresh if the data is getting old.
       const cached = this.prCache.get(pr.key);
       if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS) this.load(pr);
       this.sectionContainer = null;
+      this.regions.reset();
       this.revealFromHash();
       this.render();
     }
@@ -334,7 +338,7 @@ class Controller implements UiActions {
 
   private applyCounts(): void {
     if (!this.pr || !this.result) return;
-    this.counts.apply(this.pr.basePath, this.result.original, this.result.kept);
+    this.counts.apply(this.pr.basePath, this.result.original, this.result.kept, this.bulk());
   }
 
   private wantsSection(): boolean {
@@ -351,7 +355,7 @@ class Controller implements UiActions {
       const since = performance.now() - this.lastLocate;
       if (since >= INCOMPLETE_RESCAN_MS) {
         this.lastLocate = performance.now();
-        anchor = this.counts.locate(this.result.original);
+        anchor = this.counts.locate(this.result.original, this.bulk());
       } else if (fromMutation) {
         this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
       }
@@ -366,6 +370,11 @@ class Controller implements UiActions {
     } else {
       this.section.unmount();
     }
+  }
+
+  /** Parts of a diff page that hold no header counters, so scans can skip them. */
+  private bulk(): Element[] {
+    return this.pr?.isDiffView && this.result ? this.regions.find(this.result.files) : [];
   }
 
   /** The closest common ancestor of the first and last file diff on the page. */
