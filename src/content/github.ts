@@ -46,37 +46,47 @@ export interface PrFile {
   generated: boolean;
 }
 
-const DIGEST_LENGTH = 64;
+/** sha256 hex, as GitHub reports it. */
+const DIGEST = /^[0-9a-f]{64}$/;
+const DIGEST_BYTES = 32;
+const HEX = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, '0'));
+
+/** Value of a lowercase hex digit's char code. */
+function hexValue(code: number): number {
+  return code <= 57 ? code - 48 : code - 87;
+}
 
 /**
  * The PR's changed files in GitHub's order, stored column-wise. The list is
  * kept for as long as the PR is open (to recompute when settings change), and
- * for a 3000-file PR one object plus one digest string per file would cost
- * ~25% more memory than a path array, one string of all digests and two
- * typed arrays.
+ * for a 3000-file PR one object plus one 64-character digest string per file
+ * take ~60% more memory than a path array plus typed arrays holding the
+ * digests as bytes and the line counts.
  */
 export class PrFileList {
   readonly length: number;
-  private readonly paths: string[] = [];
-  /** Every file's digest, concatenated. */
-  private readonly digests: string;
+  private readonly paths: string[];
+  private readonly digests: Uint8Array;
   /** Additions and deletions, interleaved. */
   private readonly lines: Uint32Array;
   private readonly generated: Uint8Array;
 
+  /** `files` must have lowercase hex sha256 digests. */
   constructor(files: readonly PrFile[]) {
     this.length = files.length;
+    this.paths = files.map((file) => file.path);
+    this.digests = new Uint8Array(files.length * DIGEST_BYTES);
     this.lines = new Uint32Array(files.length * 2);
     this.generated = new Uint8Array(files.length);
-    let digests = '';
     files.forEach((file, i) => {
-      this.paths.push(file.path);
-      digests += file.digest;
+      for (let b = 0; b < DIGEST_BYTES; b++) {
+        this.digests[i * DIGEST_BYTES + b] =
+          (hexValue(file.digest.charCodeAt(b * 2)) << 4) | hexValue(file.digest.charCodeAt(b * 2 + 1));
+      }
       this.lines[i * 2] = file.additions;
       this.lines[i * 2 + 1] = file.deletions;
       this.generated[i] = file.generated ? 1 : 0;
     });
-    this.digests = digests;
   }
 
   path(i: number): string {
@@ -84,16 +94,30 @@ export class PrFileList {
   }
 
   digest(i: number): string {
-    return this.digests.slice(i * DIGEST_LENGTH, (i + 1) * DIGEST_LENGTH);
+    let hex = '';
+    for (let b = i * DIGEST_BYTES; b < (i + 1) * DIGEST_BYTES; b++) hex += HEX[this.digests[b]!];
+    return hex;
+  }
+
+  additions(i: number): number {
+    return this.lines[i * 2]!;
+  }
+
+  deletions(i: number): number {
+    return this.lines[i * 2 + 1]!;
+  }
+
+  isGenerated(i: number): boolean {
+    return this.generated[i] === 1;
   }
 
   get(i: number): PrFile {
     return {
-      path: this.paths[i]!,
+      path: this.path(i),
       digest: this.digest(i),
-      additions: this.lines[i * 2]!,
-      deletions: this.lines[i * 2 + 1]!,
-      generated: this.generated[i] === 1,
+      additions: this.additions(i),
+      deletions: this.deletions(i),
+      generated: this.isGenerated(i),
     };
   }
 }
@@ -127,7 +151,7 @@ export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrF
   const data = JSON.parse(await res.text()) as { diffs?: RawDiff[] };
   const files: PrFile[] = [];
   for (const d of data.diffs ?? []) {
-    if (!d.path || d.pathDigest?.length !== DIGEST_LENGTH) continue;
+    if (!d.path || !d.pathDigest || !DIGEST.test(d.pathDigest)) continue;
     files.push({
       path: d.path,
       digest: d.pathDigest,

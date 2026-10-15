@@ -36,25 +36,27 @@ export function computePrune(
   const sum: PrTotals = { additions: 0, deletions: 0, files: files.length };
 
   for (let i = 0; i < files.length; i++) {
-    const file = files.get(i);
-    sum.additions += file.additions;
-    sum.deletions += file.deletions;
-    const rule = compiled.matcher.match(file.path);
+    const path = files.path(i);
+    const additions = files.additions(i);
+    const deletions = files.deletions(i);
+    sum.additions += additions;
+    sum.deletions += deletions;
+    const rule = compiled.matcher.match(path);
     let hit: PrunedFile | null = null;
     if (rule) {
-      hit = { ...file, rule: rule.pattern, source: rule.source };
+      hit = { ...files.get(i), rule: rule.pattern, source: rule.source };
     } else if (
       settings.respectLinguistGenerated &&
-      file.generated &&
-      !compiled.matcher.isExplicitlyKept(file.path)
+      files.isGenerated(i) &&
+      !compiled.matcher.isExplicitlyKept(path)
     ) {
-      hit = { ...file, rule: 'linguist-generated', source: '.gitattributes' };
+      hit = { ...files.get(i), rule: 'linguist-generated', source: '.gitattributes' };
     }
     if (hit) {
       pruned.push(hit);
       isPruned[i] = 1;
-      removed.additions += file.additions;
-      removed.deletions += file.deletions;
+      removed.additions += additions;
+      removed.deletions += deletions;
       removed.files += 1;
     }
   }

@@ -2,7 +2,8 @@
  * Offline, deterministic memory benchmark of what the content script keeps
  * for a PR: the file list, compiled rules, prune result and stylesheet. Uses
  * a cached copy of nodejs/node#65161's `page_data/file_tree` (3000 files), so
- * it needs the network only once. Measures heap retained after GC, plus where
+ * it needs the network only once. Measures memory retained after GC (JS heap
+ * plus typed-array backing stores, which live outside it), plus where
  * it was allocated (V8 sampling heap profiler, like bench/live.ts).
  *
  *   node --expose-gc bench/memory.ts
@@ -43,10 +44,11 @@ async function fixture(): Promise<string> {
 const text = await fixture();
 globalThis.fetch = (async () => ({ ok: true, status: 200, text: async () => text })) as unknown as typeof fetch;
 
-function heapUsed(): number {
+function usage(): { heap: number; buffers: number } {
   gc!();
   gc!();
-  return process.memoryUsage().heapUsed;
+  const { heapUsed, arrayBuffers } = process.memoryUsage();
+  return { heap: heapUsed, buffers: arrayBuffers };
 }
 
 interface HeapNode {
@@ -84,15 +86,18 @@ await load();
 const session = new Session();
 session.connect();
 await session.post('HeapProfiler.enable');
-const before = heapUsed();
+const before = usage();
 await session.post('HeapProfiler.startSampling', { samplingInterval: 512 });
 const { files, result, cssLength, ...retained } = await load();
-const after = heapUsed();
+const after = usage();
 const { profile } = (await session.post('HeapProfiler.getSamplingProfile')) as { profile: { head: HeapNode } };
 await session.post('HeapProfiler.stopSampling');
 
 console.log(`${files.length} files, ${result.pruned.length} pruned, stylesheet ${(cssLength / 1024).toFixed(1)} KB`);
-console.log(`retained heap: ${((after - before) / 1024).toFixed(1)} KB\n`);
+const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
+const heap = after.heap - before.heap;
+const buffers = after.buffers - before.buffers;
+console.log(`retained: ${kb(heap + buffers)} (JS heap ${kb(heap)} + array buffers ${kb(buffers)})\n`);
 console.log('live heap by allocation site (KB):');
 for (const [site, bytes] of [...sites(profile.head, new Map())].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
   console.log(`  ${(bytes / 1024).toFixed(1).padStart(7)}  ${site}`);
