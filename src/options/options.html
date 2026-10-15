@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PRune settings</title>
+    <link rel="stylesheet" href="options-style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap top-inner">
+        <img src="icons/icon-48.png" width="28" height="28" alt="" />
+        <div>
+          <h1>PRune</h1>
+          <p class="muted">Prune generated files out of GitHub pull requests.</p>
+        </div>
+        <span id="saved" class="saved" role="status" aria-live="polite"></span>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="card" aria-labelledby="general-title">
+        <h2 id="general-title">General</h2>
+        <div class="setting">
+          <label for="enabled"><strong>Enable PRune</strong><span>Turn pruning on or off on every pull request.</span></label>
+          <input id="enabled" class="switch" type="checkbox" role="switch" />
+        </div>
+        <div class="setting">
+          <label for="useRepoConfig">
+            <strong>Use the repository's <code>.pruneignore</code></strong>
+            <span>Reads <code>.pruneignore</code> (or <code>.github/pruneignore</code>) from the repository's default branch, so a team can share rules.</span>
+          </label>
+          <input id="useRepoConfig" class="switch" type="checkbox" role="switch" />
+        </div>
+        <div class="setting">
+          <label for="respectLinguistGenerated">
+            <strong>Prune files marked <code>linguist-generated</code></strong>
+            <span>Files the repository's <code>.gitattributes</code> marks as generated are pruned too.</span>
+          </label>
+          <input id="respectLinguistGenerated" class="switch" type="checkbox" role="switch" />
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="display-title">
+        <h2 id="display-title">On the "Files changed" tab</h2>
+        <fieldset class="choices">
+          <legend>Pruned file diffs</legend>
+          <label class="choice">
+            <input type="radio" name="diffMode" value="hide" />
+            <span><strong>Hide and list them at the bottom</strong><small>Diffs are removed from the list and collected in a "Pruned files" section at the end, where you can show any of them again.</small></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="diffMode" value="collapse" />
+            <span><strong>Collapse them in place</strong><small>Files stay where they are, collapsed and dimmed.</small></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="diffMode" value="show" />
+            <span><strong>Leave the diffs alone</strong><small>Only the line counts change; every diff stays visible.</small></span>
+          </label>
+        </fieldset>
+        <fieldset class="choices">
+          <legend>Pruned files in the file tree</legend>
+          <label class="choice">
+            <input type="radio" name="treeMode" value="hide" />
+            <span><strong>Hide them</strong><small>Applies when diffs are hidden; otherwise they are dimmed.</small></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="treeMode" value="dim" />
+            <span><strong>Dim them</strong><small>Keep them in the tree, faded out.</small></span>
+          </label>
+        </fieldset>
+      </section>
+
+      <section class="card" aria-labelledby="rules-title">
+        <h2 id="rules-title">Your rules</h2>
+        <p class="muted">
+          One pattern per line in <code>.gitignore</code> syntax. Your rules are applied after the built-in and
+          repository rules, so they win. Start a line with <code>!</code> to keep a file that another rule prunes.
+        </p>
+        <textarea id="userPatterns" spellcheck="false" autocomplete="off" rows="10" placeholder="# Examples
+*.snap
+src/gen/
+!package-lock.json"></textarea>
+        <p id="rule-errors" class="errors" hidden></p>
+        <div class="actions">
+          <button id="import" class="btn small" type="button">Import file…</button>
+          <button id="export" class="btn small" type="button">Export as .pruneignore</button>
+          <input id="import-file" type="file" accept=".pruneignore,.gitignore,.txt,text/plain" hidden />
+        </div>
+
+        <div class="tester">
+          <label for="test-path"><strong>Test a path</strong></label>
+          <input id="test-path" type="text" spellcheck="false" placeholder="e.g. web/pnpm-lock.yaml" />
+          <p id="test-result" class="muted" aria-live="polite">Type a file path to see which rule applies.</p>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="remote-title">
+        <h2 id="remote-title">Rules file URL</h2>
+        <p class="muted">
+          Point PRune at a <code>.pruneignore</code>-style file you keep elsewhere, like a dotfiles repository or a
+          gist (use the <em>raw</em> URL). It's fetched in the background and refreshed every hour, so editing that
+          file updates PRune without touching these settings.
+        </p>
+        <div class="inline">
+          <input id="remoteUrl" type="url" spellcheck="false" placeholder="https://raw.githubusercontent.com/you/dotfiles/main/.pruneignore" />
+          <button id="remote-save" class="btn" type="button">Save &amp; fetch</button>
+        </div>
+        <p id="remote-status" class="muted" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="builtin-title">
+        <h2 id="builtin-title">Built-in rules</h2>
+        <p class="muted">Sensible defaults for files nobody reviews by hand. Switch off any group you want to see.</p>
+        <div id="groups" class="groups"></div>
+      </section>
+
+      <section class="card" aria-labelledby="repos-title">
+        <h2 id="repos-title">Disabled repositories</h2>
+        <p class="muted">Turn PRune off for a repository from the toolbar popup while viewing one of its pull requests.</p>
+        <ul id="repos" class="repos"></ul>
+      </section>
+
+      <section class="card" aria-labelledby="repo-config-title">
+        <h2 id="repo-config-title">Sharing rules with your team</h2>
+        <p class="muted">
+          Commit a <code>.pruneignore</code> to the repository root (or <code>.github/pruneignore</code>). Everyone
+          using PRune picks it up automatically. Same syntax as above:
+        </p>
+        <pre class="example"><code># Generated API client
+packages/api-client/src/generated/
+
+# Database migration snapshots
+drizzle/meta/*.json
+
+# We do want to review lockfile changes in this repo
+!pnpm-lock.yaml</code></pre>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

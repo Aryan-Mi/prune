@@ -1,0 +1,79 @@
+/* Shared tokens for the popup and options page (GitHub Primer-like). */
+:root {
+  color-scheme: light dark;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --bg: #ffffff;
+  --bg-muted: #f6f8fa;
+  --border: #d1d9e0;
+  --border-muted: #d1d9e0b3;
+  --accent: #0969da;
+  --brand: #7c3aed;
+  --brand-muted: #7c3aed1a;
+  --success: #1a7f37;
+  --danger: #d1242f;
+  --attention: #9a6700;
+  --hover: #818b981a;
+  --radius: 6px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #f0f6fc;
+    --muted: #9198a1;
+    --bg: #0d1117;
+    --bg-muted: #151b23;
+    --border: #3d444d;
+    --border-muted: #3d444db3;
+    --accent: #4493f8;
+    --brand: #a78bfa;
+    --brand-muted: #a78bfa26;
+    --success: #3fb950;
+    --danger: #f85149;
+    --attention: #d29922;
+    --hover: #656c7633;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 400 14px/1.5 var(--font); }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font-family: var(--mono); font-size: 0.92em; }
+.muted { color: var(--muted); }
+.add { color: var(--success); font-weight: 600; }
+.del { color: var(--danger); font-weight: 600; }
+.stat { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-muted); cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap;
+  transition: background-color 120ms ease-out;
+}
+.btn:hover { background: var(--hover); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--brand); border-color: transparent; color: #fff; }
+.btn.primary:hover { background: color-mix(in srgb, var(--brand) 88%, #000); }
+.btn.small { height: 28px; padding: 0 10px; font-size: 12px; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+:is(.btn, input, select, textarea, .switch):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
+.switch {
+  appearance: none; position: relative; width: 36px; height: 20px; flex: none; margin: 0;
+  border-radius: 10px; background: var(--border); cursor: pointer; transition: background-color 120ms ease-out;
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px #0003; transition: transform 160ms cubic-bezier(.2,.8,.2,1);
+}
+.switch:checked { background: var(--brand); }
+.switch:checked::after { transform: translateX(16px); }
+.switch:disabled { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .switch, .switch::after, .btn { transition: none; }
+}

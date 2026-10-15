@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PRune</title>
+    <link rel="stylesheet" href="popup-style.css" />
+  </head>
+  <body>
+    <header class="head">
+      <img src="icons/icon-32.png" width="20" height="20" alt="" />
+      <h1>PRune</h1>
+      <label class="global" title="Turn PRune on or off everywhere">
+        <span id="global-label">On</span>
+        <input id="global" class="switch" type="checkbox" role="switch" />
+      </label>
+    </header>
+    <main id="tab" class="tab" aria-live="polite"></main>
+    <footer class="foot">
+      <button id="settings" class="btn small" type="button">Settings &amp; rules</button>
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>

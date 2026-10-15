@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+web-ext-artifacts/
+*.zip
+*.xpi
+
+# Test output
+test-results/
+playwright-report/
+e2e/.profile/
+
+# Logs & caches
+*.log
+.cache/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

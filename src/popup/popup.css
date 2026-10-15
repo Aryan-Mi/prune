@@ -1,0 +1,20 @@
+@import '../shared/page.css';
+
+body { width: 340px; }
+.head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border-muted); }
+.head h1 { flex: 1; margin: 0; font-size: 15px; font-weight: 600; }
+.global { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.tab { padding: 14px; display: grid; gap: 12px; min-height: 96px; }
+.pr { display: grid; gap: 2px; }
+.pr-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.big { display: flex; align-items: baseline; gap: 6px; }
+.big strong { font-size: 24px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.compare { display: flex; align-items: center; gap: 6px; }
+.compare .was { opacity: .55; text-decoration: line-through; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border-muted); border-radius: var(--radius); }
+.row label { display: grid; cursor: pointer; }
+.row small { color: var(--muted); font-size: 12px; }
+.empty { color: var(--muted); }
+.error { color: var(--danger); }
+.foot { display: flex; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border-muted); background: var(--bg-muted); }
+.foot .btn { width: 100%; }

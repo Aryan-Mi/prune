@@ -1,0 +1,30 @@
+{
+  "name": "prune",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prune generated files (lockfiles, snapshots, build output…) out of GitHub pull request diffs and line counts.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "bun@1.3.13",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "build:firefox": "bun scripts/build.ts --target=firefox",
+    "build:chrome": "bun scripts/build.ts --target=chrome",
+    "watch": "bun scripts/build.ts --watch",
+    "dev:firefox": "bun scripts/build.ts --target=firefox && web-ext run --source-dir dist/firefox",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests",
+    "test:e2e": "bun run build:chrome && node e2e/run.ts",
+    "lint:firefox": "web-ext lint --source-dir dist/firefox",
+    "package": "bun scripts/build.ts --package",
+    "check": "bun run typecheck && bun run test && bun run build && bun run lint:firefox"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "@types/firefox-webext-browser": "^143.0.1",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.64.0",
+    "typescript": "^7.0.2",
+    "web-ext": "^10.7.0"
+  }
+}

@@ -1,0 +1,25 @@
+import { expect, test } from 'bun:test';
+import { parsePrUrl } from '../src/content/github.ts';
+
+test('parses PR URLs on every tab', () => {
+  expect(parsePrUrl('/vitejs/vite/pull/23648')).toMatchObject({
+    owner: 'vitejs',
+    repo: 'vite',
+    number: 23648,
+    key: 'vitejs/vite#23648',
+    basePath: '/vitejs/vite/pull/23648',
+    isDiffView: false,
+  });
+  expect(parsePrUrl('/a/b/pull/1/files')?.isDiffView).toBe(true);
+  expect(parsePrUrl('/a/b/pull/1/changes')?.isDiffView).toBe(true);
+  expect(parsePrUrl('/a/b/pull/1/files/abc..def')?.isDiffView).toBe(true);
+  expect(parsePrUrl('/a/b/pull/1/commits')?.isDiffView).toBe(false);
+  expect(parsePrUrl('/a/b/pull/1/commits/abc123')?.isDiffView).toBe(true);
+  expect(parsePrUrl('/Org/Repo/pull/1')?.repoKey).toBe('org/repo');
+});
+
+test('ignores non-PR pages', () => {
+  expect(parsePrUrl('/a/b')).toBeNull();
+  expect(parsePrUrl('/a/b/pulls')).toBeNull();
+  expect(parsePrUrl('/a/b/issues/1')).toBeNull();
+});

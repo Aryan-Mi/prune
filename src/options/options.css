@@ -1,0 +1,72 @@
+@import '../shared/page.css';
+
+body { background: var(--bg-muted); }
+.wrap { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+.top { background: var(--bg); border-bottom: 1px solid var(--border-muted); margin-bottom: 24px; }
+.top-inner { display: flex; align-items: center; gap: 12px; padding-top: 16px; padding-bottom: 16px; }
+.top-inner > div { flex: 1; }
+.top h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.2; }
+.top p { margin: 2px 0 0; font-size: 13px; }
+.saved { font-size: 12px; color: var(--success); opacity: 0; transition: opacity 200ms ease-out; }
+.saved.show { opacity: 1; }
+
+main { display: grid; gap: 16px; padding-bottom: 48px; }
+.card { background: var(--bg); border: 1px solid var(--border-muted); border-radius: 12px; padding: 20px; }
+.card h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.card > p { margin: 0 0 12px; font-size: 13px; }
+
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 0; }
+.setting + .setting { border-top: 1px solid var(--border-muted); }
+.setting label { display: grid; gap: 2px; cursor: pointer; }
+.setting label span { color: var(--muted); font-size: 13px; }
+
+.choices { border: 0; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.choices:last-child { margin-bottom: 0; }
+.choices legend { font-weight: 600; font-size: 13px; margin-bottom: 8px; padding: 0; }
+.choice {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--border-muted); border-radius: 8px; transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+.choice:hover { background: var(--hover); }
+.choice:has(input:checked) { border-color: var(--brand); background: var(--brand-muted); }
+.choice input { margin: 3px 0 0; accent-color: var(--brand); }
+.choice span { display: grid; gap: 2px; }
+.choice small { color: var(--muted); font-size: 12px; }
+
+textarea, input[type="text"], input[type="url"] {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); font-family: var(--mono); font-size: 13px; line-height: 1.5;
+}
+textarea { resize: vertical; min-height: 180px; tab-size: 2; }
+.errors { margin: 8px 0 0; color: var(--danger); font-size: 12px; white-space: pre-line; }
+.actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.inline { display: flex; gap: 8px; }
+.inline input { flex: 1; }
+#remote-status { margin: 8px 0 0; font-size: 12px; }
+#remote-status.error { color: var(--danger); }
+
+.tester { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-muted); display: grid; gap: 6px; }
+.tester label { font-size: 13px; }
+#test-result { margin: 0; font-size: 13px; }
+#test-result.pruned { color: var(--brand); }
+
+.groups { display: grid; gap: 8px; }
+.group { border: 1px solid var(--border-muted); border-radius: 8px; }
+.group-head { display: flex; align-items: center; gap: 16px; padding: 10px 12px; }
+.group-head label { flex: 1; display: grid; gap: 2px; cursor: pointer; }
+.group-head small { color: var(--muted); font-size: 12px; }
+.group details { border-top: 1px solid var(--border-muted); padding: 6px 12px 10px; }
+.group summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.chips code { padding: 1px 6px; border-radius: 999px; background: var(--bg-muted); border: 1px solid var(--border-muted); font-size: 12px; }
+.group.off .chips { opacity: .5; }
+
+.repos { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.repos li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 6px 6px 12px; border: 1px solid var(--border-muted); border-radius: 8px; font-family: var(--mono); font-size: 13px; }
+.repos .empty { font-family: var(--font); color: var(--muted); border-style: dashed; padding: 10px 12px; }
+
+.example { margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--bg-muted); border: 1px solid var(--border-muted); overflow-x: auto; font-size: 13px; line-height: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .saved, .choice { transition: none; }
+}

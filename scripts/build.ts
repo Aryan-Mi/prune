@@ -1,0 +1,134 @@
+/**
+ * Builds the extension for Firefox and/or Chromium into dist/<target>.
+ *
+ *   bun scripts/build.ts                    # both targets
+ *   bun scripts/build.ts --target=firefox   # one target
+ *   bun scripts/build.ts --watch            # rebuild on change
+ *   bun scripts/build.ts --package          # also zip into dist/*.zip
+ */
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import * as esbuild from 'esbuild';
+import pkg from '../package.json' with { type: 'json' };
+
+type Target = 'firefox' | 'chrome';
+
+const args = new Map(
+  process.argv.slice(2).map((a) => {
+    const [k, v] = a.replace(/^--/, '').split('=');
+    return [k!, v ?? 'true'] as const;
+  }),
+);
+const targets: Target[] = args.has('target') ? [args.get('target') as Target] : ['firefox', 'chrome'];
+const watch = args.has('watch');
+const shouldPackage = args.has('package');
+const root = join(import.meta.dir, '..');
+
+const ICON_SIZES = [16, 32, 48, 96, 128] as const;
+
+function manifest(target: Target) {
+  const icons = Object.fromEntries(ICON_SIZES.map((s) => [s, `icons/icon-${s}.png`]));
+  return {
+    manifest_version: 3,
+    name: 'PRune',
+    short_name: 'PRune',
+    version: pkg.version,
+    description: pkg.description,
+    homepage_url: 'https://github.com/Aryan-Mi/prune',
+    icons,
+    permissions: ['storage'],
+    // Only requested at runtime, for the optional remote rules file URL.
+    optional_host_permissions: ['https://*/*'],
+    content_scripts: [
+      {
+        matches: ['https://github.com/*'],
+        js: ['content.js'],
+        run_at: 'document_start',
+      },
+    ],
+    background: target === 'firefox' ? { scripts: ['background.js'] } : { service_worker: 'background.js' },
+    action: {
+      default_title: 'PRune',
+      default_popup: 'popup.html',
+      default_icon: icons,
+    },
+    options_ui: { page: 'options.html', open_in_tab: true },
+    ...(target === 'firefox'
+      ? {
+          browser_specific_settings: {
+            gecko: {
+              id: 'prune@aryan-mi.github.io',
+              strict_min_version: '140.0',
+              data_collection_permissions: { required: ['none'] },
+            },
+            gecko_android: { strict_min_version: '142.0' },
+          },
+        }
+      : { minimum_chrome_version: '120' }),
+  };
+}
+
+function esbuildOptions(target: Target): esbuild.BuildOptions {
+  return {
+    entryPoints: {
+      content: join(root, 'src/content/index.ts'),
+      background: join(root, 'src/background/index.ts'),
+      popup: join(root, 'src/popup/popup.ts'),
+      options: join(root, 'src/options/options.ts'),
+      'popup-style': join(root, 'src/popup/popup.css'),
+      'options-style': join(root, 'src/options/options.css'),
+    },
+    outdir: join(root, 'dist', target),
+    bundle: true,
+    format: 'iife',
+    target: target === 'firefox' ? ['firefox140'] : ['chrome120'],
+    // Readable output: easier to debug and to get through store review.
+    minify: false,
+    legalComments: 'none',
+    charset: 'utf8',
+    logLevel: 'warning',
+  };
+}
+
+async function writeStatic(target: Target): Promise<void> {
+  const out = join(root, 'dist', target);
+  await mkdir(out, { recursive: true });
+  await Promise.all([
+    cp(join(root, 'public'), out, { recursive: true }),
+    cp(join(root, 'src/popup/popup.html'), join(out, 'popup.html')),
+    cp(join(root, 'src/options/options.html'), join(out, 'options.html')),
+    writeFile(join(out, 'manifest.json'), `${JSON.stringify(manifest(target), null, 2)}\n`),
+  ]);
+}
+
+async function packageTarget(target: Target): Promise<void> {
+  const proc = Bun.spawn(
+    [
+      join(root, 'node_modules/.bin/web-ext'),
+      'build',
+      '--source-dir',
+      join(root, 'dist', target),
+      '--artifacts-dir',
+      join(root, 'dist'),
+      '--filename',
+      `prune-${target}-${pkg.version}.zip`,
+      '--overwrite-dest',
+    ],
+    { stdout: 'inherit', stderr: 'inherit' },
+  );
+  if ((await proc.exited) !== 0) throw new Error(`Packaging ${target} failed`);
+}
+
+for (const target of targets) {
+  await rm(join(root, 'dist', target), { recursive: true, force: true });
+  await writeStatic(target);
+  if (watch) {
+    const ctx = await esbuild.context(esbuildOptions(target));
+    await ctx.watch();
+    console.log(`watching dist/${target}`);
+  } else {
+    await esbuild.build(esbuildOptions(target));
+    if (shouldPackage) await packageTarget(target);
+    console.log(`built dist/${target}`);
+  }
+}
