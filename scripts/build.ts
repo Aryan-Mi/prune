@@ -11,6 +11,7 @@ import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as esbuild from 'esbuild';
 import pkg from '../package.json' with { type: 'json' };
+import { PR_MATCH } from '../src/content/route.ts';
 
 type Target = 'firefox' | 'chrome';
 
@@ -27,9 +28,6 @@ const readable = args.has('readable');
 const root = join(import.meta.dir, '..');
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
-
-/** PR pages (see PR_PATH in src/content/route.ts); they get content.js right away. */
-const PR_MATCH = 'https://github.com/*/*/pull/*';
 
 function manifest(target: Target) {
   const icons = Object.fromEntries(ICON_SIZES.map((s) => [s, `icons/icon-${s}.png`]));

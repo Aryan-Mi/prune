@@ -3,12 +3,14 @@
  * from the rest so the loader (loader.ts) stays a few hundred bytes.
  */
 
-/**
- * A PR page's path: owner, repo, number, then the tab and its sub-path. The
- * manifest's PR match pattern (PR_MATCH in scripts/build.ts) must match every
- * path this does.
- */
+/** A PR page's path: owner, repo, number, then the tab and its sub-path. */
 export const PR_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/([^/]+)(\/[^/]+)?)?/;
+
+/**
+ * The manifest's match pattern for PR pages, which get content.js right away
+ * (scripts/build.ts). It must match every path PR_PATH does.
+ */
+export const PR_MATCH = 'https://github.com/*/*/pull/*';
 
 const NAVIGATION_EVENTS = ['soft-nav:render', 'soft-nav:end', 'turbo:load', 'popstate'];
 

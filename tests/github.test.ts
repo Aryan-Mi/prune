@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { parsePrUrl } from '../src/content/github.ts';
+import { PR_MATCH } from '../src/content/route.ts';
 import { PrFileList } from '../src/shared/filetree.ts';
 
 test('parses PR URLs on every tab', () => {
@@ -23,6 +24,19 @@ test('ignores non-PR pages', () => {
   expect(parsePrUrl('/a/b')).toBeNull();
   expect(parsePrUrl('/a/b/pulls')).toBeNull();
   expect(parsePrUrl('/a/b/issues/1')).toBeNull();
+});
+
+test("the manifest's PR match pattern covers every PR URL", () => {
+  // Match pattern → regex: `*` matches anything, including slashes.
+  const pattern = new RegExp(`^${PR_MATCH.replace(/[.?+^$()[\]{}|\\/]/g, '\\$&').replaceAll('*', '.*')}$`);
+  const paths = ['/a/b/pull/1', '/a/b/pull/1/files', '/a/b/pull/1/changes', '/a/b/pull/1/commits/abc', '/a.b/c-d/pull/9'];
+  for (const path of paths) {
+    expect(parsePrUrl(path)).not.toBeNull();
+    expect(pattern.test(`https://github.com${path}`)).toBe(true);
+  }
+  // The loader handles everything else, and must not be skipped there.
+  expect(pattern.test('https://github.com/a/b/pulls')).toBe(false);
+  expect(pattern.test('https://github.com/a/b')).toBe(false);
 });
 
 test('PrFileList stores files column-wise and gives them back', () => {
