@@ -62,16 +62,19 @@ function firstDiff(result: PruneResult): Element | null {
  * Climbs from `el` while the parent's other children hold file diffs too (or
  * there are none), up to the element holding all of them. GitHub renders
  * diffs in batches and not in file-tree order, so this is re-run as they load.
+ * A batch that hasn't loaded yet looks like a loaded one (same tag and
+ * class), so it counts too: otherwise the list would stop at the first batch.
  */
 function growList(el: Element): Element {
   let list = el;
   for (let parent = list.parentElement; parent && parent !== document.body; parent = list.parentElement) {
+    const kind = list.getAttribute('class');
     let others = false;
     let holders = false;
     for (let child = parent.firstElementChild; child && !holders; child = child.nextElementSibling) {
       if (child === list) continue;
       others = true;
-      holders = holdsDiff(child);
+      holders = (!!kind && child.localName === list.localName && child.getAttribute('class') === kind) || holdsDiff(child);
     }
     if (others && !holders) break;
     list = parent;
