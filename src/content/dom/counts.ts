@@ -1,6 +1,6 @@
 import { parseCount, replaceCount } from '../../shared/format.ts';
 import type { PrTotals } from '../../shared/filetree.ts';
-import { queryOutside } from './regions.ts';
+import { outsideRoots, queryRoots } from './regions.ts';
 
 /**
  * Rewrites the PR header's line counts (+additions −deletions) and the
@@ -99,10 +99,11 @@ export class CountPatcher {
       if (this.diffstatPatched && this.counterPatched) return false;
     }
     const regions = bulk();
-    const found = this.scan(basePath, original, kept, findDeletions(regions), findTabLinks(regions));
+    const roots = outsideRoots(regions);
+    const found = this.scan(basePath, original, kept, findDeletions(roots), findTabLinks(roots));
     if (!this.counterPatched && (this.diffstatPatched || this.counterMissed)) {
       // The header is there (or had time to render), but its "Files changed" link isn't in a tab bar.
-      found.push(...this.scan(basePath, original, kept, [], queryOutside(FILES_LINK_SELECTOR, regions)));
+      found.push(...this.scan(basePath, original, kept, [], queryRoots(roots, FILES_LINK_SELECTOR)));
     }
     this.counterMissed = !this.counterPatched;
     if (
@@ -115,7 +116,7 @@ export class CountPatcher {
       // Something is missing. Make sure it is not in `bulk`; if it was, keep looking there.
       const patches = this.texts.length + this.attrs.length;
       found.push(
-        ...this.scan(basePath, original, kept, findDeletions([]), document.querySelectorAll(FILES_LINK_SELECTOR)),
+        ...this.scan(basePath, original, kept, findDeletions(outsideRoots([])), document.querySelectorAll(FILES_LINK_SELECTOR)),
       );
       this.bulkChecked = this.texts.length + this.attrs.length === patches;
     }
@@ -127,9 +128,9 @@ export class CountPatcher {
   locate(original: PrTotals, bulk: () => readonly Element[]): Element | null {
     if (this.diffstatAnchor) return this.diffstatAnchor;
     const regions = bulk();
-    this.scanDiffstats(original, null, findDeletions(regions), []);
+    this.scanDiffstats(original, null, findDeletions(outsideRoots(regions)), []);
     if (!this.diffstatAnchor && regions.length > 0 && !this.bulkChecked) {
-      this.scanDiffstats(original, null, findDeletions([]), []);
+      this.scanDiffstats(original, null, findDeletions(outsideRoots([])), []);
       this.bulkChecked = !this.diffstatAnchor;
     }
     return this.diffstatAnchor;
@@ -310,19 +311,17 @@ export class CountPatcher {
  * (on a 5,000-element page ~30 µs instead of ~230 µs).
  */
 
-/** Elements with a deletion class outside `skip`, in document order. */
-function findDeletions(skip: readonly Element[]): Element[] {
-  const [a, b] = DELETION_CLASSES.map((name) => [...queryOutside(`.${name}`, skip)]) as [Element[], Element[]];
+/** Elements with a deletion class in `roots` (see regions.ts), in document order. */
+function findDeletions(roots: readonly Element[]): Element[] {
+  const [a, b] = DELETION_CLASSES.map((name) => queryRoots(roots, `.${name}`)) as [Element[], Element[]];
   if (a.length === 0 || b.length === 0) return a.length === 0 ? b : a;
   return [...new Set([...a, ...b])].sort((x, y) => (x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
 }
 
-/** "Files changed" links in the page's tab bars (`<nav>`; both UIs) outside `skip`. */
-function findTabLinks(skip: readonly Element[]): Set<Element> {
+/** "Files changed" links in the tab bars (`<nav>`, in both UIs) in `roots`. */
+function findTabLinks(roots: readonly Element[]): Set<Element> {
   const links = new Set<Element>();
-  for (const nav of queryOutside('nav', skip)) {
-    // A nav around the file tree is not a tab bar.
-    if (skip.some((region) => nav.contains(region))) continue;
+  for (const nav of queryRoots(roots, 'nav')) {
     for (const link of nav.querySelectorAll(FILES_LINK_SELECTOR)) links.add(link);
   }
   return links;

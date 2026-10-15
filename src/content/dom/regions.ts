@@ -92,24 +92,43 @@ function findTree(result: PruneResult): Element | null {
   return item?.matches('[role="treeitem"]') ? item.closest('[role="tree"]') : null;
 }
 
-/** `document.querySelectorAll(selector)` without the subtrees of `skip`, in document order. */
-export function queryOutside(selector: string, skip: readonly Element[]): Iterable<Element> {
+/**
+ * The largest subtrees of the document that hold none of `skip`, in document
+ * order. Querying them (see `queryRoots`) is `document.querySelectorAll()`
+ * without `skip`, and without the ancestors of `skip` (which hold no counters,
+ * since they hold a diff list or file tree). Compute once, query many times.
+ */
+export function outsideRoots(skip: readonly Element[]): Element[] {
   const root = document.documentElement;
   // Only proper containers in the document itself (not <html>/<body>, not in a shadow tree).
   const skipped = new Set(skip.filter((el) => el !== document.body && el !== root && root.contains(el)));
-  if (skipped.size === 0) return document.querySelectorAll(selector);
+  if (skipped.size === 0) return [root];
   const ancestors = new Set<Element>();
   for (const el of skipped) for (let n = el.parentElement; n && !ancestors.has(n); n = n.parentElement) ancestors.add(n);
-  const found: Element[] = root.matches(selector) ? [root] : [];
-  // Walk down the ancestors of skipped elements; their other children are queried whole.
+  const roots: Element[] = [];
+  // Walk down the ancestors of skipped elements; their other children are roots.
   const visit = (parent: Element): void => {
     for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
       if (skipped.has(child)) continue;
-      if (child.matches(selector)) found.push(child);
       if (ancestors.has(child)) visit(child);
-      else for (const el of child.querySelectorAll(selector)) found.push(el);
+      else roots.push(child);
     }
   };
   visit(root);
+  return roots;
+}
+
+/**
+ * Elements in `roots` (from `outsideRoots`) matching `selector`, in document
+ * order. Pass one class or tag name: browsers answer those from a fast path
+ * that is several times cheaper than a selector list.
+ */
+export function queryRoots(roots: readonly Element[], selector: string): Element[] {
+  const found: Element[] = [];
+  for (const root of roots) {
+    if (root.matches(selector)) found.push(root);
+    // Most roots next to the big regions are leaves (<link>, <button>, ...).
+    if (root.firstElementChild) for (const el of root.querySelectorAll(selector)) found.push(el);
+  }
   return found;
 }
