@@ -600,7 +600,22 @@ function prune(
     etag,
     repo,
     repoFetched,
-  });
+  }).then((result) => result && shareStrings(result));
+}
+
+/**
+ * Messages arrive with a copy of every string, but the pruned files' rules
+ * and sources repeat (hundreds of files under one `vendor/` rule): keeps one
+ * of each, the rest is garbage right away.
+ */
+function shareStrings(result: PruneResult): PruneResult {
+  const strings = new Map<string, string>();
+  const share = (s: string): string => strings.get(s) ?? (strings.set(s, s), s);
+  for (const file of result.pruned) {
+    file.rule = share(file.rule);
+    file.source = share(file.source);
+  }
+  return result;
 }
 
 /** prune() with the file list fetched here, for when the background script doesn't (or couldn't). */
