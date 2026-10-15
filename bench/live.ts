@@ -34,6 +34,11 @@ interface Scenario {
   idle?: boolean;
   /** Path to soft-navigate to once `url` has loaded, as if following a link. */
   softNav?: string;
+  /**
+   * Steady state: measure only once the page has loaded and settled, while
+   * scrolling through it for 6 s (GitHub keeps loading diffs). Ideally zero.
+   */
+  steady?: boolean;
 }
 
 const SCENARIOS: Scenario[] = [
@@ -45,6 +50,7 @@ const SCENARIOS: Scenario[] = [
   { name: 'non-PR page (repo home)', url: 'https://github.com/vitejs/vite', idle: true },
   // Opening a PR from another GitHub page without a page load (GitHub's soft navigation).
   { name: 'repo → small PR (soft nav)', url: 'https://github.com/vitejs/vite', softNav: '/vitejs/vite/pull/23648' },
+  { name: 'huge PR · files, scrolling', url: 'https://github.com/nodejs/node/pull/65161/files', steady: true },
 ];
 
 interface Sample {
@@ -171,13 +177,17 @@ function heapBytes(node: HeapNode, sites: Map<string, number>, caller = ''): num
 }
 
 async function measure(page: Page, cdp: CDPSession, scenario: Scenario, sites: Map<string, number>): Promise<Sample> {
-  const { url, idle, softNav } = scenario;
+  const { url, idle, softNav, steady } = scenario;
+  if (steady) {
+    await page.goto(url, { waitUntil: 'load', timeout: 120_000 });
+    await page.waitForTimeout(5000);
+  }
   await cdp.send('HeapProfiler.enable');
   await cdp.send('HeapProfiler.startSampling', { samplingInterval: 512 });
   await cdp.send('Profiler.enable');
   await cdp.send('Profiler.setSamplingInterval', { interval: SAMPLE_US });
   await cdp.send('Profiler.start');
-  await page.goto(url, { waitUntil: 'load', timeout: 120_000 });
+  if (!steady) await page.goto(url, { waitUntil: 'load', timeout: 120_000 });
   if (softNav) {
     await page.waitForTimeout(1500);
     await page.evaluate((href) => {
@@ -189,8 +199,8 @@ async function measure(page: Page, cdp: CDPSession, scenario: Scenario, sites: M
     await page.waitForURL((u) => u.pathname === softNav, { timeout: 60_000 });
   }
   // Let the page settle, then scroll through to trigger lazy/progressive loading.
-  await page.waitForTimeout(3000);
-  for (let i = 0; i < 8; i++) {
+  if (!steady) await page.waitForTimeout(3000);
+  for (let i = 0; i < (steady ? 24 : 8); i++) {
     await page.mouse.wheel(0, 3000);
     await page.waitForTimeout(250);
   }
