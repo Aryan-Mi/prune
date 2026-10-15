@@ -55,12 +55,12 @@ export class CountPatcher {
   private diffstatPatched = false;
   /** A full scan found nothing that a scan skipping the `bulk` regions missed. */
   private bulkChecked = false;
-  /** The last whole-page search did not find the "Files changed" counter. */
-  private counterMissed = false;
+  /** Whole-page searches in a row that did not find the "Files changed" counter. */
+  private counterMisses = 0;
 
-  /** Both the header diffstat and the "Files changed" counter were found and patched. */
+  /** Both the header diffstat and the "Files changed" counter were found and patched (see also `isIntact()`). */
   isComplete(): boolean {
-    return this.isIntact() && this.diffstatPatched && this.counterPatched;
+    return this.diffstatPatched && this.counterPatched;
   }
 
   /** True when every patch is still in the DOM and still shows our value (also when there are none). */
@@ -107,11 +107,11 @@ export class CountPatcher {
     const regions = bulk();
     const roots = outsideRoots(regions);
     const found = this.scan(basePath, original, kept, findDeletions(roots), findTabLinks(roots));
-    if (!this.counterPatched && (this.diffstatPatched || this.counterMissed)) {
+    if (!this.counterPatched && (this.diffstatPatched || this.counterMisses >= 2)) {
       // The header is there (or had time to render), but its "Files changed" link isn't in a tab bar.
       found.push(...this.scan(basePath, original, kept, [], queryRoots(roots, FILES_LINK_SELECTOR)));
     }
-    this.counterMissed = !this.counterPatched;
+    this.counterMisses = this.counterPatched ? 0 : this.counterMisses + 1;
     if (
       regions.length > 0 &&
       !this.bulkChecked &&
@@ -158,13 +158,13 @@ export class CountPatcher {
     this.counterPatched = false;
     this.diffstatPatched = false;
     this.bulkChecked = false;
-    this.counterMissed = false;
+    this.counterMisses = 0;
   }
 
   /** Makes the next `apply()` search the whole page (e.g. another tab of the PR is showing). */
   rescope(): void {
     this.scope = null;
-    this.counterMissed = false;
+    this.counterMisses = 0;
   }
 
   /** Drops bookkeeping for nodes GitHub removed or rewrote. */
