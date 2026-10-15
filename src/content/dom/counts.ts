@@ -114,12 +114,21 @@ export class CountPatcher {
    *
    * Unless `full`, only the elements that held the counters last time, or
    * else the ones GitHub's ids point to (`landmarks()`), are searched (a few
-   * dozen elements), and the whole page only if something is missing there.
-   * The whole page is searched without `bulk` (see regions.ts), which is
-   * searched only if something is not found elsewhere. Returns whether the
-   * whole page was searched.
+   * dozen elements), and the whole page only if something is missing there,
+   * unless `wait`: while the page is still rendering, what is missing from
+   * the landmarks will most likely render in them (e.g. the React header's
+   * diffstat comes after its tabs). The whole page is searched without `bulk`
+   * (see regions.ts), which is searched only if something is not found
+   * elsewhere. Returns whether the whole page was searched.
    */
-  apply(basePath: string, original: PrTotals, kept: PrTotals, bulk: () => readonly Element[], full = true): boolean {
+  apply(
+    basePath: string,
+    original: PrTotals,
+    kept: PrTotals,
+    bulk: () => readonly Element[],
+    full = true,
+    wait = false,
+  ): boolean {
     this.prune();
     const values = `${original.additions} ${original.deletions} ${original.files} ${kept.additions} ${kept.deletions} ${kept.files}`;
     if (values !== this.values) {
@@ -128,7 +137,8 @@ export class CountPatcher {
       this.values = values;
     }
     if (!full) {
-      for (const scope of [this.holders, landmarks()]) {
+      const marks = landmarks();
+      for (const scope of [this.holders, marks]) {
         const els = scope.filter((el) => el.isConnected);
         if (els.length === 0) continue;
         const found = this.scan(
@@ -138,7 +148,7 @@ export class CountPatcher {
           els.flatMap((el) => queryWithin(el, DELETION_SELECTOR)),
           els.flatMap((el) => queryWithin(el, FILES_LINK_SELECTOR)),
         );
-        if (this.diffstatPatched && this.counterPatched) {
+        if ((this.diffstatPatched && this.counterPatched) || (wait && scope === marks)) {
           this.holders = found;
           // Every patch is in place: what the guard saw meanwhile were our own writes.
           this.guard.takeRecords();
@@ -173,9 +183,12 @@ export class CountPatcher {
     return true;
   }
 
-  /** Finds the header diffstat without changing it (used when nothing is pruned). */
-  locate(original: PrTotals, bulk: () => readonly Element[]): Element | null {
+  /** Finds the header diffstat without changing it (used when nothing is pruned); `wait` as for `apply()`. */
+  locate(original: PrTotals, bulk: () => readonly Element[], wait = false): Element | null {
     if (this.diffstatAnchor) return this.diffstatAnchor;
+    const marks = landmarks();
+    this.scanDiffstats(original, null, marks.flatMap((el) => queryWithin(el, DELETION_SELECTOR)), []);
+    if (this.diffstatAnchor || (wait && marks.length > 0)) return this.diffstatAnchor;
     const regions = bulk();
     this.scanDiffstats(original, null, findDeletions(outsideRoots(regions)), []);
     if (!this.diffstatAnchor && regions.length > 0 && !this.bulkChecked) {

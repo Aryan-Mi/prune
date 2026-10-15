@@ -20,9 +20,10 @@ const CHECK_INTERVAL_MS = 100;
 /** Whole-page search gap while some header counter has not been found yet (page still rendering). */
 const INCOMPLETE_RESCAN_MS = 250;
 /**
- * How long after a navigation (once loaded) a header counter that is still
- * missing stops being searched for in the whole page. If it shows up later, it
- * does so in the part of the header that stays watched.
+ * How long after a navigation (and at least until the page has loaded) a
+ * header counter missing from GitHub's landmarks is expected to render in
+ * them. Then the whole page is searched for it once more; after that, it is
+ * only waited for in the landmarks (see `isSettled()`).
  */
 const GIVE_UP_MS = 2000;
 
@@ -82,6 +83,8 @@ class Controller implements UiActions {
   private readonly observer = new MutationObserver((records) => this.onMutations(records));
   private checkTimer = 0;
   private retryTimer = 0;
+  /** Searches the whole page after all once a missing counter is no longer expected in the landmarks. */
+  private waitTimer = 0;
   private lastCheck = 0;
   private lastRescan = 0;
   private lastLocate = 0;
@@ -216,7 +219,13 @@ class Controller implements UiActions {
     const found = this.isPruning()
       ? this.counts.isComplete() && this.counts.isIntact()
       : !this.result || !!this.counts.diffstatAnchor;
-    return found || (performance.now() - this.shownAt >= GIVE_UP_MS && landmarks().length > 0);
+    return found || (this.waitFor() === 0 && landmarks().length > 0);
+  }
+
+  /** How much longer what is missing from the header landmarks is expected to render there (see GIVE_UP_MS). */
+  private waitFor(): number {
+    if (document.readyState !== 'complete') return GIVE_UP_MS;
+    return Math.max(0, this.shownAt + GIVE_UP_MS - performance.now());
   }
 
   private onMutations(records: MutationRecord[]): void {
@@ -500,7 +509,17 @@ class Controller implements UiActions {
   private applyCounts(): void {
     if (!this.pr || !this.result) return;
     const { original, kept } = this.result;
-    if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false)) this.lastRescan = performance.now();
+    const wait = this.waitFor();
+    if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false, wait > 0)) {
+      this.lastRescan = performance.now();
+    }
+    this.searchAfterWait(!this.counts.isComplete(), wait);
+  }
+
+  /** While something `missing` is waited for in the landmarks, has the whole page searched once that is over. */
+  private searchAfterWait(missing: boolean, wait: number): void {
+    clearTimeout(this.waitTimer);
+    if (missing && wait > 0) this.waitTimer = window.setTimeout(() => this.check(false), wait + 10);
   }
 
   private wantsSection(): boolean {
@@ -515,7 +534,9 @@ class Controller implements UiActions {
     // While pruning, applyCounts() discovers the diffstat; locate() is only for
     // finding where to put the pill when there is nothing to patch.
     if (!anchor && this.result && !this.isPruning() && this.canLocate(fromMutation)) {
-      anchor = this.counts.locate(this.result.original, () => this.bulk());
+      const wait = this.waitFor();
+      anchor = this.counts.locate(this.result.original, () => this.bulk(), wait > 0);
+      this.searchAfterWait(!anchor, wait);
     }
     anchor ??= findDiffstatFallback();
     // Avoid a floating pill flashing while the header is still rendering.
