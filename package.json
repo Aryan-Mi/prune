@@ -18,7 +18,8 @@
     "lint:firefox": "web-ext lint --source-dir dist/firefox",
     "package": "bun scripts/build.ts --package",
     "check": "bun run typecheck && bun run test && bun run build && bun run lint:firefox",
-    "bench": "bun run build:chrome && node bench/live.ts"
+    "bench": "bun run build:chrome && node bench/live.ts",
+    "bench:memory": "node --expose-gc bench/memory.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

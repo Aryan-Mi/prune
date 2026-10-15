@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { PrFile } from '../src/content/github.ts';
+import { PrFileList, type PrFile } from '../src/content/github.ts';
 import { buildCss } from '../src/content/dom/styles.ts';
 import { computePrune } from '../src/content/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
@@ -10,17 +10,16 @@ const file = (path: string, additions: number, deletions: number, generated = fa
   digest: Bun.CryptoHasher.hash('sha256', path, 'hex'),
   additions,
   deletions,
-  status: 'MODIFIED',
   generated,
 });
 
-const files = [
+const files = PrFileList.of([
   file('package.json', 2, 2),
   file('pnpm-lock.yaml', 600, 1100),
   file('src/index.ts', 20, 4),
   file('src/api/client.ts', 100, 0, true),
   file('dist/bundle.js', 50, 30),
-];
+]);
 const settings: Settings = { ...DEFAULT_SETTINGS };
 
 describe('computePrune', () => {
@@ -31,6 +30,8 @@ describe('computePrune', () => {
     expect(r.removed).toEqual({ additions: 750, deletions: 1130, files: 3 });
     expect(r.kept).toEqual({ additions: 22, deletions: 6, files: 2 });
     expect(r.pruned.find((f) => f.path === 'src/api/client.ts')?.source).toBe('.gitattributes');
+    expect(r.pruned[0]).toEqual({ ...file('pnpm-lock.yaml', 600, 1100), rule: 'pnpm-lock.yaml', source: 'Built-in · Lockfiles' });
+    expect(r.prunedDirs).toEqual(['src/api', 'dist']);
   });
 
   test('uses GitHub totals when given (file list may be capped)', () => {
@@ -88,7 +89,7 @@ describe('buildCss', () => {
 
   test('escapes paths into id selectors', () => {
     const odd = computePrune(
-      [file('weird"name.lock', 1, 1), file('1 a/-2.lock', 1, 1)],
+      PrFileList.of([file('weird"name.lock', 1, 1), file('1 a/-2.lock', 1, 1)]),
       {},
       compileRules(normalizeSettings({ userPatterns: '*.lock' })),
       settings,

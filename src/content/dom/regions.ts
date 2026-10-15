@@ -1,4 +1,4 @@
-import type { PrFile } from '../github.ts';
+import type { PrFileList } from '../github.ts';
 
 /**
  * On a big "Files changed" tab, the diff list and the file tree are nearly the
@@ -14,7 +14,7 @@ export class BulkRegions {
   private tree: Element | null = null;
 
   /** The diff list and file tree that are on the page. Cheap once found. */
-  find(files: readonly PrFile[]): Element[] {
+  find(files: PrFileList): Element[] {
     if (!this.list?.isConnected) this.list = firstDiff(files);
     if (this.list) this.list = growList(this.list);
     if (!this.tree?.isConnected) this.tree = findTree(files);
@@ -30,9 +30,9 @@ export class BulkRegions {
   }
 }
 
-function firstDiff(files: readonly PrFile[]): Element | null {
-  for (const file of files) {
-    const diff = document.getElementById(`diff-${file.digest}`);
+function firstDiff(files: PrFileList): Element | null {
+  for (let i = 0; i < files.length; i++) {
+    const diff = document.getElementById(`diff-${files.digest(i)}`);
     if (diff) return diff;
   }
   return null;
@@ -65,11 +65,10 @@ function holdsDiff(el: Element): boolean {
 }
 
 /** The file tree: rows are `#file-tree-item-diff-<digest>` (classic UI) or have the path as id (new UI). */
-function findTree(files: readonly PrFile[]): Element | null {
-  const file = files[0];
-  if (!file) return null;
+function findTree(files: PrFileList): Element | null {
+  if (files.length === 0) return null;
   const item =
-    document.getElementById(`file-tree-item-diff-${file.digest}`) ?? document.getElementById(file.path);
+    document.getElementById(`file-tree-item-diff-${files.digest(0)}`) ?? document.getElementById(files.path(0));
   return item?.matches('[role="treeitem"]') ? item.closest('[role="tree"]') : null;
 }
 

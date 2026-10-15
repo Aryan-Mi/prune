@@ -56,8 +56,8 @@ function time<T>(name: string, fn: () => T): T {
 console.log(`file_tree: ${(text.length / 1024).toFixed(0)} KB\n`);
 const files = time('parseFileTree', () => parseFileTree(text));
 const compiled = time('compileRules', () => compileRules(settings));
-const result = time('computePrune', () => computePrune(files.files, {}, compiled, settings));
+const result = time('computePrune', () => computePrune(files, {}, compiled, settings));
 const css = time('buildCss', () =>
   buildCss(result, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() }),
 );
-console.log(`\n${files.files.length} files, ${result.pruned.length} pruned, css ${(css.length / 1024).toFixed(0)} KB`);
+console.log(`\n${files.length} files, ${result.pruned.length} pruned, css ${(css.length / 1024).toFixed(0)} KB`);

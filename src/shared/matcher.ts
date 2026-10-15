@@ -17,8 +17,6 @@ export interface Rule {
   negated: boolean;
   /** Human readable origin, e.g. "Built-in · Lockfiles" or "Repo .pruneignore". */
   source: string;
-  /** Full-path regex; always correct, used to pinpoint which rule matched. */
-  re: RegExp;
   glob: CompiledGlob;
 }
 
@@ -170,10 +168,9 @@ function escapeChar(c: string): string {
   return REGEX_SPECIAL.test(c) || c === '[' || c === ']' || c === '*' || c === '?' ? `\\${c}` : c;
 }
 
-/** Compiles one pattern (without `!`); throws if it makes an invalid regex. */
+/** Compiles one pattern (without `!`). See parseRules for validation. */
 export function compileRule(pattern: string, negated: boolean, source: string): Rule {
-  const glob = compileGlob(pattern);
-  return { pattern, negated, source, glob, re: new RegExp(globToRegexSource(glob)) };
+  return { pattern, negated, source, glob: compileGlob(pattern) };
 }
 
 /** Parses .gitignore-style text into rules. Invalid lines are reported, not thrown. */
@@ -195,7 +192,11 @@ export function parseRules(text: string, source: string): ParseResult {
     }
     if (line === '') continue;
     try {
-      rules.push(compileRule(line, negated, source));
+      const rule = compileRule(line, negated, source);
+      // Validates the pattern (e.g. `[z-a]` throws). Not kept: compiled regexes
+      // are large, and most rules never need their own (see ruleMatches).
+      new RegExp(rule.glob.source);
+      rules.push(rule);
     } catch (err) {
       errors.push({ line: idx + 1, text: lines[idx]!, message: (err as Error).message, source });
     }
@@ -254,10 +255,22 @@ class Segment {
   }
 }
 
-/** One rule on its own; component tests where possible, so most rule regexes are never compiled. */
+/** Full-path regexes for single rules, compiled on first use. */
+const ruleRegexes = new WeakMap<CompiledGlob, RegExp>();
+
+function ruleRegex(glob: CompiledGlob): RegExp {
+  let re = ruleRegexes.get(glob);
+  if (!re) {
+    re = new RegExp(globToRegexSource(glob));
+    ruleRegexes.set(glob, re);
+  }
+  return re;
+}
+
+/** One rule on its own; component tests where possible, so most rules never need a regex. */
 function ruleMatches(rule: Rule, path: string, parts: readonly string[]): boolean {
   const { kind, literal, suffix } = rule.glob;
-  if (kind === 'path' || (literal === null && suffix === null)) return rule.re.test(path);
+  if (kind === 'path' || (literal === null && suffix === null)) return ruleRegex(rule.glob).test(path);
   // name: any component · dir: any component but the last.
   const end = kind === 'name' ? parts.length : parts.length - 1;
   for (let i = 0; i < end; i++) {

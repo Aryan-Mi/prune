@@ -1,5 +1,5 @@
 /** Matches a number as GitHub renders it in any locale: 1,136 · 1.136 · 1 136. */
-const NUMBER_RUN = /\d(?:[\d.,   ]*\d)?/;
+const NUMBER_RUN = /\d(?:[\d.,\u00a0\u202f ]*\d)?/;
 
 /** Extracts the integer from text like "+1,136", "−1.136" or "(38)". */
 export function parseCount(text: string): number | null {

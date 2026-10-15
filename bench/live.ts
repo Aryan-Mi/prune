@@ -6,19 +6,21 @@
  * sampling heap profiler (live objects allocated under content.js frames).
  *
  *   bun run build:chrome && node bench/live.ts [--runs=5] [--json=out.json]
- *     [--only=<scenario regex>] [--breakdown]
+ *     [--only=<scenario regex>] [--breakdown] [--extension=dist/chrome]
  *
- * --breakdown prints where the time went: per content.js function (self time,
- * including native/GC work it triggered), averaged over runs.
+ * --breakdown prints where the time went (per content.js function, self time
+ * including native/GC work it triggered, averaged over runs) and where the
+ * live heap was allocated.
  */
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { chromium, type CDPSession, type Page } from 'playwright';
 
 const root = join(import.meta.dirname, '..');
-const extensionPath = join(root, 'dist/chrome');
 const arg = (name: string, fallback: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1] ?? fallback;
+// --extension=<dir> benchmarks another build (e.g. a saved copy) instead of dist/chrome.
+const extensionPath = resolve(root, arg('extension', 'dist/chrome'));
 const RUNS = Number(arg('runs', '5'));
 const JSON_OUT = arg('json', '');
 const ONLY = new RegExp(arg('only', ''), 'i');
@@ -29,6 +31,8 @@ const SCENARIOS = [
   { name: 'huge PR · files', url: 'https://github.com/nodejs/node/pull/65161/files' },
   { name: 'small PR · conversation', url: 'https://github.com/vitejs/vite/pull/23648' },
   { name: 'small PR · files', url: 'https://github.com/vitejs/vite/pull/23648/files' },
+  // Not a PR: the content script still runs on every github.com page, so this is its idle cost.
+  { name: 'non-PR page (repo home)', url: 'https://github.com/vitejs/vite', idle: true },
 ];
 
 interface Sample {
@@ -128,19 +132,31 @@ function contentScriptTasks(
 }
 
 interface HeapNode {
-  callFrame: { url: string };
+  callFrame: { url: string; functionName: string; lineNumber: number };
   selfSize: number;
   children: HeapNode[];
 }
 
-function heapBytes(node: HeapNode, insideOurs = false): number {
-  const ours = insideOurs || /chrome-extension:\/\/[^/]+\/content\.js$/.test(node.callFrame.url);
-  let total = ours ? node.selfSize : 0;
-  for (const child of node.children) total += heapBytes(child, ours);
+/**
+ * Live bytes allocated under content.js frames. `sites` collects them by the
+ * allocating frame: a content.js function, or a builtin plus its content.js caller.
+ */
+function heapBytes(node: HeapNode, sites: Map<string, number>, caller = ''): number {
+  const { url, functionName, lineNumber } = node.callFrame;
+  const isOurs = OUR_SCRIPT.test(url);
+  const name = `${functionName || '(anonymous)'}${isOurs ? `:${lineNumber + 1}` : ''}`;
+  const inside = isOurs || caller !== '';
+  let total = 0;
+  if (inside && node.selfSize) {
+    total += node.selfSize;
+    const site = isOurs ? name : `${name} < ${caller}`;
+    sites.set(site, (sites.get(site) ?? 0) + node.selfSize);
+  }
+  for (const child of node.children) total += heapBytes(child, sites, isOurs ? name : caller);
   return total;
 }
 
-async function measure(page: Page, cdp: CDPSession, url: string): Promise<Sample> {
+async function measure(page: Page, cdp: CDPSession, url: string, sites: Map<string, number>, idle = false): Promise<Sample> {
   await cdp.send('HeapProfiler.enable');
   await cdp.send('HeapProfiler.startSampling', { samplingInterval: 512 });
   await cdp.send('Profiler.enable');
@@ -165,12 +181,12 @@ async function measure(page: Page, cdp: CDPSession, url: string): Promise<Sample
   const pill = await page.evaluate(
     () => document.querySelector('[data-prune-ui="indicator"]')?.shadowRoot?.querySelector('.label')?.textContent ?? '',
   );
-  if (!/pruned|off/.test(pill)) throw new Error(`PRune did not run on ${url} (pill: "${pill}")`);
+  if (idle ? pill !== '' : !/pruned|off/.test(pill)) throw new Error(`Unexpected PRune pill on ${url}: "${pill}"`);
   return {
     totalMs: tasks.reduce((a, b) => a + b, 0),
     maxTaskMs: Math.max(0, ...tasks),
     tasks: tasks.length,
-    heapKb: heapBytes(profile.head) / 1024,
+    heapKb: heapBytes(profile.head, sites) / 1024,
     functions,
     natives,
     longest,
@@ -186,6 +202,7 @@ const context = await chromium.launchPersistentContext('', {
 
 const scenarios = SCENARIOS.filter((s) => ONLY.test(s.name));
 const results: Record<string, Sample[]> = {};
+const allocationSites: Record<string, Map<string, number>> = {};
 try {
   const page = context.pages()[0] ?? (await context.newPage());
   const cdp = await context.newCDPSession(page);
@@ -193,7 +210,8 @@ try {
   for (const s of scenarios) await page.goto(s.url, { waitUntil: 'load', timeout: 120_000 });
   for (let r = 0; r < RUNS; r++) {
     for (const s of scenarios) {
-      (results[s.name] ??= []).push(await measure(page, cdp, s.url));
+      const sites = (allocationSites[s.name] ??= new Map());
+      (results[s.name] ??= []).push(await measure(page, cdp, s.url, sites, s.idle));
     }
   }
 } finally {
@@ -229,3 +247,12 @@ for (const [name, samples] of Object.entries(results)) {
   summary[name] = { samples: samples.map(({ functions, natives, longest, ...rest }) => rest), median: { totalMs: med('totalMs'), maxTaskMs: med('maxTaskMs'), heapKb: med('heapKb') }, worst: { totalMs: worst('totalMs'), maxTaskMs: worst('maxTaskMs'), heapKb: worst('heapKb') } };
 }
 if (JSON_OUT) await writeFile(JSON_OUT, JSON.stringify(summary, null, 2));
+
+if (BREAKDOWN) {
+  for (const [name, sites] of Object.entries(allocationSites)) {
+    console.log(`\n${name}: live heap by allocation site (KB, mean over runs)`);
+    for (const [site, bytes] of [...sites].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+      console.log(`  ${(bytes / 1024 / RUNS).toFixed(1).padStart(7)}  ${site}`);
+    }
+  }
+}

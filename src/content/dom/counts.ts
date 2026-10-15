@@ -182,7 +182,7 @@ export class CountPatcher {
         }
         const text = node.nodeValue ?? '';
         // Only bare counters like "38" or " (38)" — never labels.
-        if (!/^[\s (]*\d[\d.,   ]*[)\s]*$/.test(text)) continue;
+        if (!/^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*[)\s]*$/.test(text)) continue;
         if (parseCount(text) !== original) continue;
         this.patchText(node, kept);
         this.counterPatched = true;
@@ -241,7 +241,7 @@ function numberNode(el: Element): Text | null {
 function isSigned(node: Text, sign: '+' | '-', value: number): boolean {
   const own = node.nodeValue ?? '';
   const full = (node.parentElement?.textContent ?? own).trim();
-  const signOk = sign === '+' ? full.startsWith('+') : /^[-−–]/.test(full);
+  const signOk = sign === '+' ? full.startsWith('+') : /^[-\u2212\u2013]/.test(full);
   return signOk && parseCount(own) === value;
 }
 

@@ -251,9 +251,9 @@ export class Indicator {
         compare.append(was, el('span', 'arrow', '→'), statElement(result.kept.additions, result.kept.deletions));
         summary.append(compare);
       }
-      if (result.files.length < result.original.files) {
+      if (result.listed < result.original.files) {
         summary.append(
-          el('div', '', `GitHub lists only the first ${formatCount(result.files.length)} files; the rest can't be checked.`),
+          el('div', '', `GitHub lists only the first ${formatCount(result.listed)} files; the rest can't be checked.`),
         );
       }
       frag.append(summary);

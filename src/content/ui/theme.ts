@@ -122,10 +122,11 @@ export function icon(markup: string): SVGElement {
       markup.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '),
       'image/svg+xml',
     );
-    template = doc.documentElement as unknown as SVGElement;
+    // Import once, so the parsed SVG document itself isn't kept alive.
+    template = document.importNode(doc.documentElement as unknown as SVGElement, true);
     iconCache.set(markup, template);
   }
-  return document.importNode(template, true);
+  return template.cloneNode(true) as SVGElement;
 }
 
 export function styleElement(css: string): HTMLStyleElement {

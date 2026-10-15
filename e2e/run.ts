@@ -166,6 +166,38 @@ try {
   const back = await readHeader(page);
   check('header stays pruned after navigating back', back.additions === expected.additions, `got +${back.additions}`);
 
+  // ---- Repo page → PR (soft navigation) ----------------------------------------
+  // PRune does nothing PR-specific on other pages (no settings, no UI) until a
+  // PR is opened in the same document.
+  await page.goto('https://github.com/vitejs/vite', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1500);
+  check('no indicator on a non-PR page', (await page.locator('[data-prune-ui]').count()) === 0);
+  await page.evaluate((href) => {
+    (window as { pruneE2eMarker?: boolean }).pruneE2eMarker = true;
+    const link = document.createElement('a');
+    link.href = href;
+    link.textContent = 'PR';
+    document.body.append(link);
+    link.click();
+  }, new URL(PR).pathname);
+  await page.waitForURL(/\/pull\/23648$/);
+  const soft = await page.evaluate(() => (window as { pruneE2eMarker?: boolean }).pruneE2eMarker === true);
+  await page.waitForFunction(
+    () => document.querySelector('[data-prune-ui="indicator"]')?.shadowRoot?.querySelector('.pill.active'),
+    undefined,
+    { timeout: 20_000 },
+  );
+  let fromRepo = await readHeader(page);
+  for (let i = 0; i < 50 && fromRepo.additions !== expected.additions; i++) {
+    await page.waitForTimeout(100);
+    fromRepo = await readHeader(page);
+  }
+  check(
+    `PR opened from a repo page is pruned (${soft ? 'soft' : 'full'} navigation)`,
+    fromRepo.additions === expected.additions,
+    `got +${fromRepo.additions}`,
+  );
+
   check('no PRune errors in console', errors.length === 0, errors.join('; '));
 } finally {
   await context.close();

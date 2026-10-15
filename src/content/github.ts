@@ -42,15 +42,78 @@ export interface PrFile {
   digest: string;
   additions: number;
   deletions: number;
-  /** GitHub's change type, e.g. ADDED, MODIFIED, DELETED, RENAMED. */
-  status: string;
   /** Marked `linguist-generated` via .gitattributes. */
   generated: boolean;
 }
 
-export interface PrFiles {
-  files: PrFile[];
-  baseOid: string | null;
+/** sha256 hex, as GitHub reports it. */
+const DIGEST = /^[0-9a-f]{64}$/;
+
+/**
+ * The PR's changed files in GitHub's order, stored column-wise. The list is
+ * kept for as long as the PR is open (to recompute when settings change), and
+ * for a 3000-file PR one object per file takes far more memory than two string
+ * arrays plus typed arrays for the line counts. The path and digest strings
+ * are the ones JSON.parse created, so they're not copied.
+ */
+export class PrFileList {
+  length = 0;
+  private readonly paths: string[] = [];
+  private readonly digests: string[] = [];
+  /** Additions and deletions, interleaved. */
+  private readonly lines: Uint32Array;
+  private readonly generated: Uint8Array;
+
+  constructor(capacity: number) {
+    this.lines = new Uint32Array(capacity * 2);
+    this.generated = new Uint8Array(capacity);
+  }
+
+  static of(files: readonly PrFile[]): PrFileList {
+    const list = new PrFileList(files.length);
+    for (const f of files) list.push(f.path, f.digest, f.additions, f.deletions, f.generated);
+    return list;
+  }
+
+  /** Appends a file; at most `capacity` files fit. */
+  push(path: string, digest: string, additions: number, deletions: number, generated: boolean): void {
+    const i = this.length++;
+    this.paths.push(path);
+    this.digests.push(digest);
+    this.lines[i * 2] = additions;
+    this.lines[i * 2 + 1] = deletions;
+    this.generated[i] = generated ? 1 : 0;
+  }
+
+  path(i: number): string {
+    return this.paths[i]!;
+  }
+
+  digest(i: number): string {
+    return this.digests[i]!;
+  }
+
+  additions(i: number): number {
+    return this.lines[i * 2]!;
+  }
+
+  deletions(i: number): number {
+    return this.lines[i * 2 + 1]!;
+  }
+
+  isGenerated(i: number): boolean {
+    return this.generated[i] === 1;
+  }
+
+  get(i: number): PrFile {
+    return {
+      path: this.path(i),
+      digest: this.digest(i),
+      additions: this.additions(i),
+      deletions: this.deletions(i),
+      generated: this.isGenerated(i),
+    };
+  }
 }
 
 interface RawDiff {
@@ -58,7 +121,6 @@ interface RawDiff {
   pathDigest?: string;
   linesAdded?: number;
   linesDeleted?: number;
-  changeType?: string;
   isGenerated?: boolean;
 }
 
@@ -73,7 +135,7 @@ const JSON_HEADERS = {
  * far cheaper than downloading the diff (no file contents, ~250 bytes/file).
  * GitHub caps the list at 3000 files, the same limit as its UI and API.
  */
-export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrFiles> {
+export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrFileList> {
   const res = await fetch(`${pr.basePath}/page_data/file_tree`, {
     headers: JSON_HEADERS,
     credentials: 'same-origin',
@@ -83,21 +145,15 @@ export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrF
   return parseFileTree(await res.text());
 }
 
-export function parseFileTree(text: string): PrFiles {
-  const data = JSON.parse(text) as { diffs?: RawDiff[]; baseRefOid?: string };
-  const files: PrFile[] = [];
-  for (const d of data.diffs ?? []) {
-    if (!d.path || !d.pathDigest) continue;
-    files.push({
-      path: d.path,
-      digest: d.pathDigest,
-      additions: d.linesAdded ?? 0,
-      deletions: d.linesDeleted ?? 0,
-      status: (d.changeType ?? '').replace('CHANGE_TYPE_', ''),
-      generated: d.isGenerated === true,
-    });
+export function parseFileTree(text: string): PrFileList {
+  const diffs = (JSON.parse(text) as { diffs?: RawDiff[] }).diffs ?? [];
+  // Straight into columns: no intermediate object per file.
+  const list = new PrFileList(diffs.length);
+  for (const d of diffs) {
+    if (!d.path || !d.pathDigest || !DIGEST.test(d.pathDigest)) continue;
+    list.push(d.path, d.pathDigest, d.linesAdded ?? 0, d.linesDeleted ?? 0, d.isGenerated === true);
   }
-  return { files, baseOid: data.baseRefOid ?? null };
+  return list;
 }
 
 export interface RepoConfig {

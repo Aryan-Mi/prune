@@ -27,6 +27,9 @@ const CSS = /* css */ `
 @media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
 `;
 
+/** Whether the box is expanded. Outlives the section, which is recreated per PR page visit. */
+let open = true;
+
 /**
  * "Pruned files" box appended after the last file in the diff list (hide
  * mode). Lists hidden files and lets you reveal any of them in place.
@@ -34,7 +37,7 @@ const CSS = /* css */ `
 export class PrunedSection {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
-  private open = true;
+  private readonly style = styleElement(BASE_CSS + CSS);
   private state: ViewState | null = null;
 
   private readonly actions: UiActions;
@@ -62,20 +65,20 @@ export class PrunedSection {
     const revealedCount = result.pruned.filter((f) => state.revealed.has(f.digest)).length;
     const allRevealed = revealedCount === result.pruned.length;
 
-    const box = el('section', `box${this.open ? ' open' : ''}`);
+    const box = el('section', `box${open ? ' open' : ''}`);
     box.setAttribute('aria-label', 'Pruned files');
 
     const bar = el('div', 'bar');
     const title = el('button', 'title');
     title.type = 'button';
-    title.setAttribute('aria-expanded', String(this.open));
+    title.setAttribute('aria-expanded', String(open));
     const mark = el('span', 'icon-mark');
     mark.append(icon(ICON_SCISSORS));
     title.append(icon(ICON_CHEVRON), mark);
     title.append(el('strong', '', 'Pruned files'), el('span', 'count', String(result.pruned.length)));
     title.append(statElement(result.removed.additions, result.removed.deletions));
     title.addEventListener('click', () => {
-      this.open = !this.open;
+      open = !open;
       if (this.state) this.render(this.state);
     });
     const toggleAll = el('button', 'btn', allRevealed ? 'Hide all diffs' : 'Show all diffs');
@@ -112,12 +115,6 @@ export class PrunedSection {
     note.append(settings);
     box.append(note);
 
-    this.root.replaceChildren(styleNode(), box);
+    this.root.replaceChildren(this.style, box);
   }
-}
-
-const SECTION_CSS = BASE_CSS + CSS;
-
-function styleNode(): HTMLStyleElement {
-  return styleElement(SECTION_CSS);
 }
