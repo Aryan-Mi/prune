@@ -42,15 +42,60 @@ export interface PrFile {
   digest: string;
   additions: number;
   deletions: number;
-  /** GitHub's change type, e.g. ADDED, MODIFIED, DELETED, RENAMED. */
-  status: string;
   /** Marked `linguist-generated` via .gitattributes. */
   generated: boolean;
 }
 
-export interface PrFiles {
-  files: PrFile[];
-  baseOid: string | null;
+const DIGEST_LENGTH = 64;
+
+/**
+ * The PR's changed files in GitHub's order, stored column-wise. The list is
+ * kept for as long as the PR is open (to recompute when settings change), and
+ * for a 3000-file PR one object plus one digest string per file would cost
+ * ~25% more memory than a path array, one string of all digests and two
+ * typed arrays.
+ */
+export class PrFileList {
+  readonly length: number;
+  private readonly paths: string[] = [];
+  /** Every file's digest, concatenated. */
+  private readonly digests: string;
+  /** Additions and deletions, interleaved. */
+  private readonly lines: Uint32Array;
+  private readonly generated: Uint8Array;
+
+  constructor(files: readonly PrFile[]) {
+    this.length = files.length;
+    this.lines = new Uint32Array(files.length * 2);
+    this.generated = new Uint8Array(files.length);
+    let digests = '';
+    files.forEach((file, i) => {
+      this.paths.push(file.path);
+      digests += file.digest;
+      this.lines[i * 2] = file.additions;
+      this.lines[i * 2 + 1] = file.deletions;
+      this.generated[i] = file.generated ? 1 : 0;
+    });
+    this.digests = digests;
+  }
+
+  path(i: number): string {
+    return this.paths[i]!;
+  }
+
+  digest(i: number): string {
+    return this.digests.slice(i * DIGEST_LENGTH, (i + 1) * DIGEST_LENGTH);
+  }
+
+  get(i: number): PrFile {
+    return {
+      path: this.paths[i]!,
+      digest: this.digest(i),
+      additions: this.lines[i * 2]!,
+      deletions: this.lines[i * 2 + 1]!,
+      generated: this.generated[i] === 1,
+    };
+  }
 }
 
 interface RawDiff {
@@ -58,7 +103,6 @@ interface RawDiff {
   pathDigest?: string;
   linesAdded?: number;
   linesDeleted?: number;
-  changeType?: string;
   isGenerated?: boolean;
 }
 
@@ -73,27 +117,26 @@ const JSON_HEADERS = {
  * far cheaper than downloading the diff (no file contents, ~250 bytes/file).
  * GitHub caps the list at 3000 files, the same limit as its UI and API.
  */
-export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrFiles> {
+export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrFileList> {
   const res = await fetch(`${pr.basePath}/page_data/file_tree`, {
     headers: JSON_HEADERS,
     credentials: 'same-origin',
     signal,
   });
   if (!res.ok) throw new Error(`file_tree request failed: HTTP ${res.status}`);
-  const data = JSON.parse(await res.text()) as { diffs?: RawDiff[]; baseRefOid?: string };
+  const data = JSON.parse(await res.text()) as { diffs?: RawDiff[] };
   const files: PrFile[] = [];
   for (const d of data.diffs ?? []) {
-    if (!d.path || !d.pathDigest) continue;
+    if (!d.path || d.pathDigest?.length !== DIGEST_LENGTH) continue;
     files.push({
       path: d.path,
       digest: d.pathDigest,
       additions: d.linesAdded ?? 0,
       deletions: d.linesDeleted ?? 0,
-      status: (d.changeType ?? '').replace('CHANGE_TYPE_', ''),
       generated: d.isGenerated === true,
     });
   }
-  return { files, baseOid: data.baseRefOid ?? null };
+  return new PrFileList(files);
 }
 
 export interface RepoConfig {

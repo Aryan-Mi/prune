@@ -24,33 +24,53 @@ export interface StyleOptions {
 
 export class PruneStyles {
   private el: HTMLStyleElement | null = null;
-  private css = '';
+  /**
+   * What the stylesheet was built from. The CSS text itself is not kept: it can
+   * be ~50 KB on a big PR, and the browser already holds it.
+   */
+  private built: { result: PruneResult; diffMode: DiffMode; treeMode: TreeMode; revealed: string } | null = null;
+  private active = false;
 
   update(result: PruneResult | null, options: StyleOptions): void {
-    const css = result && result.pruned.length > 0 ? buildCss(result, options) : '';
-    if (css === this.css && (css === '' || this.el?.isConnected)) return;
-    this.css = css;
-    if (!css) {
-      this.el?.remove();
+    if (!result || result.pruned.length === 0) {
+      this.clear();
       return;
     }
-    if (!this.el) {
-      this.el = document.createElement('style');
-      this.el.id = STYLE_ID;
+    const { diffMode, treeMode } = options;
+    const revealed = [...options.revealed].join();
+    const built = this.built;
+    if (
+      built?.result !== result ||
+      built.diffMode !== diffMode ||
+      built.treeMode !== treeMode ||
+      built.revealed !== revealed
+    ) {
+      this.built = { result, diffMode, treeMode, revealed };
+      const css = buildCss(result, options);
+      this.active = css !== '';
+      if (!this.active) {
+        this.el?.remove();
+        return;
+      }
+      if (!this.el) {
+        this.el = document.createElement('style');
+        this.el.id = STYLE_ID;
+      }
+      this.el.textContent = css;
     }
-    this.el.textContent = css;
     this.ensure();
   }
 
   /** Re-attaches the stylesheet if a full-page navigation swapped <head>. */
   ensure(): void {
-    if (this.css && this.el && !this.el.isConnected) {
+    if (this.active && this.el && !this.el.isConnected) {
       (document.head ?? document.documentElement).append(this.el);
     }
   }
 
   clear(): void {
-    this.css = '';
+    this.built = null;
+    this.active = false;
     this.el?.remove();
   }
 }
@@ -68,7 +88,7 @@ export function buildCss(result: PruneResult, options: StyleOptions): string {
     treeSelectors.push(`#file-tree-item-diff-${file.digest}`, `li[role="treeitem"][id=${cssString(file.path)}]`);
   }
   // Directories whose every file is pruned (new UI tree ids are paths).
-  for (const dir of fullyPrunedDirs(result)) {
+  for (const dir of result.prunedDirs) {
     treeSelectors.push(`li[role="treeitem"][id=${cssString(dir)}]`);
   }
 
@@ -88,19 +108,4 @@ export function buildCss(result: PruneResult, options: StyleOptions): string {
     }
   }
   return rules.join('\n');
-}
-
-function fullyPrunedDirs(result: PruneResult): string[] {
-  const keptDirs = new Set<string>();
-  const prunedDirs = new Set<string>();
-  for (const file of result.files) {
-    const target = result.prunedDigests.has(file.digest) ? prunedDirs : keptDirs;
-    let i = file.path.lastIndexOf('/');
-    while (i > 0) {
-      const dir = file.path.slice(0, i);
-      target.add(dir);
-      i = dir.lastIndexOf('/');
-    }
-  }
-  return [...prunedDirs].filter((d) => !keptDirs.has(d));
 }

@@ -1,6 +1,6 @@
 import type { CompiledRules } from '../shared/rules.ts';
 import type { Settings } from '../shared/settings.ts';
-import type { PrFile, PrTotals } from './github.ts';
+import type { PrFile, PrFileList, PrTotals } from './github.ts';
 
 export interface PrunedFile extends PrFile {
   /** The pattern that matched, or "linguist-generated". */
@@ -10,10 +10,12 @@ export interface PrunedFile extends PrFile {
 }
 
 export interface PruneResult {
-  /** Every file in the PR (up to GitHub's 3000-file cap), in GitHub's order. */
-  files: PrFile[];
+  /** How many files GitHub listed (it stops at 3000). */
+  listed: number;
   pruned: PrunedFile[];
   prunedDigests: Set<string>;
+  /** Directories that contain only pruned files. */
+  prunedDirs: string[];
   /** Totals as GitHub reports them. */
   original: PrTotals;
   /** Totals after pruning. */
@@ -23,16 +25,18 @@ export interface PruneResult {
 }
 
 export function computePrune(
-  files: PrFile[],
+  files: PrFileList,
   githubTotals: Partial<PrTotals>,
   compiled: CompiledRules,
   settings: Settings,
 ): PruneResult {
   const pruned: PrunedFile[] = [];
+  const isPruned = new Uint8Array(files.length);
   const removed: PrTotals = { additions: 0, deletions: 0, files: 0 };
   const sum: PrTotals = { additions: 0, deletions: 0, files: files.length };
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files.get(i);
     sum.additions += file.additions;
     sum.deletions += file.deletions;
     const rule = compiled.matcher.match(file.path);
@@ -48,6 +52,7 @@ export function computePrune(
     }
     if (hit) {
       pruned.push(hit);
+      isPruned[i] = 1;
       removed.additions += file.additions;
       removed.deletions += file.deletions;
       removed.files += 1;
@@ -66,11 +71,28 @@ export function computePrune(
   };
 
   return {
-    files,
+    listed: files.length,
     pruned,
     prunedDigests: new Set(pruned.map((f) => f.digest)),
+    prunedDirs: pruned.length > 0 ? fullyPrunedDirs(files, isPruned) : [],
     original,
     kept,
     removed,
   };
+}
+
+function fullyPrunedDirs(files: PrFileList, isPruned: Uint8Array): string[] {
+  const keptDirs = new Set<string>();
+  const prunedDirs = new Set<string>();
+  for (let f = 0; f < files.length; f++) {
+    const target = isPruned[f] ? prunedDirs : keptDirs;
+    const path = files.path(f);
+    let i = path.lastIndexOf('/');
+    while (i > 0) {
+      const dir = path.slice(0, i);
+      target.add(dir);
+      i = dir.lastIndexOf('/');
+    }
+  }
+  return [...prunedDirs].filter((d) => !keptDirs.has(d));
 }

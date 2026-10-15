@@ -19,7 +19,7 @@ import {
   fetchRepoConfig,
   parsePrUrl,
   type PrFile,
-  type PrFiles,
+  type PrFileList,
   type PrRef,
   type PrTotals,
   type RepoConfig,
@@ -41,7 +41,7 @@ const INCOMPLETE_RESCAN_MS = 250;
 const INACTIVE_KEY = 'prune:inactive';
 
 interface PrData {
-  files: PrFiles;
+  files: PrFileList;
   totals: Partial<PrTotals>;
   repoConfig: RepoConfig;
 }
@@ -262,7 +262,7 @@ class Controller implements UiActions {
       repoPath: this.data.repoConfig.path,
       remoteText,
     });
-    this.result = computePrune(this.data.files.files, this.data.totals, this.compiled, this.settings);
+    this.result = computePrune(this.data.files, this.data.totals, this.compiled, this.settings);
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -370,12 +370,12 @@ class Controller implements UiActions {
 
   /** The closest common ancestor of the first and last file diff on the page. */
   private findDiffListContainer(): Element | null {
-    const files = this.result?.files;
+    const files = this.data?.files;
     if (!files || files.length === 0) return null;
     let first: Element | null = null;
     let last: Element | null = null;
-    for (let i = 0; i < files.length && !first; i++) first = document.getElementById(`diff-${files[i]!.digest}`);
-    for (let i = files.length - 1; i >= 0 && !last; i--) last = document.getElementById(`diff-${files[i]!.digest}`);
+    for (let i = 0; i < files.length && !first; i++) first = document.getElementById(`diff-${files.digest(i)}`);
+    for (let i = files.length - 1; i >= 0 && !last; i--) last = document.getElementById(`diff-${files.digest(i)}`);
     if (!first || !last) return null;
     if (first === last) return first.parentElement;
     const ancestors = new Set<Element>();
