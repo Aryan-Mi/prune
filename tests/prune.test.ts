@@ -104,6 +104,13 @@ describe('buildCss', () => {
     expect(css).toContain('display: none');
   });
 
+  test('the classic UI only gets its own tree selectors', () => {
+    const css = buildCss(r, { diffMode: 'hide', treeMode: 'hide', revealed: new Set(), classic: true });
+    expect(css).toContain(`#diff-${lock.digest}`);
+    expect(css).toContain(`#file-tree-item-diff-${lock.digest}`);
+    expect(css).not.toContain('[role="treeitem"]');
+  });
+
   test('revealed files are not hidden', () => {
     const css = buildCss(r, { diffMode: 'hide', treeMode: 'hide', revealed: new Set([lock.digest]) });
     expect(css).not.toContain(`#diff-${lock.digest}`);
