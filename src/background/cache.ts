@@ -16,9 +16,13 @@ import type { RepoConfig } from '../shared/messages.ts';
  */
 
 /** Lists kept at most; the oldest are dropped first. */
-const MAX_LISTS = 16;
-/** Rough cap on what the lists take in storage.session (Chromium allows 10 MB in total). */
-const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_LISTS = 8;
+/**
+ * Rough cap on what the lists take in storage.session, which lives in the
+ * browser's memory for the whole session: ~3 lists of 3000 files, or hundreds
+ * of typical PRs (Chromium would allow 10 MB in total).
+ */
+const MAX_BYTES = 1024 * 1024;
 const INDEX_KEY = 'fileLists';
 
 interface IndexEntry {
