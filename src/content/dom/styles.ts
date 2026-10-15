@@ -77,8 +77,13 @@ export class PruneStyles {
   }
 }
 
+/** Ids that need more than a backslash before some characters. */
+const NEEDS_CODE_POINTS = /^-?\d|^-$|[\0-\x1f\x7f]/;
+
 /** `#id` selector for any id, escaped as `CSS.escape` would. */
 function idSelector(id: string): string {
+  // Nearly every path: only `.`, `/` and the like to escape, no callback needed (twice as fast).
+  if (!NEEDS_CODE_POINTS.test(id)) return `#${id.replace(/[^\w\u0080-\uffff-]/g, '\\$&')}`;
   return `#${id.replace(/^-?\d|^-$|[^\w\u0080-\uffff-]/g, (m) => {
     const prefix = m.length === 2 ? '-' : '';
     const code = m.charCodeAt(m.length - 1);
@@ -91,8 +96,10 @@ function idSelector(id: string): string {
 export function buildCss(result: PruneResult, options: StyleOptions): string {
   const diffSelectors: string[] = [];
   const treeSelectors: string[] = [];
+  // Usually empty; then the digests aren't even hashed for the lookup.
+  const revealed = options.revealed.size > 0 ? options.revealed : null;
   for (const file of result.pruned) {
-    if (options.revealed.has(file.digest)) continue;
+    if (revealed?.has(file.digest)) continue;
     diffSelectors.push(`#diff-${file.digest}`);
     treeSelectors.push(`#file-tree-item-diff-${file.digest}`, `li${idSelector(file.path)}[role="treeitem"]`);
   }
