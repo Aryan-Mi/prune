@@ -73,7 +73,7 @@ const settings = { ...DEFAULT_SETTINGS };
 
 /** What the controller holds on to while the PR is open. */
 async function load() {
-  const fileTree = await fetchFileTree(parsePrUrl('/nodejs/node/pull/65161')!);
+  const fileTree = await (await fetchFileTree(parsePrUrl('/nodejs/node/pull/65161')!)).text();
   // The background script's work; the reply arrives as a copy.
   const result = structuredClone(prunePr(fileTree, {}, settings, {}));
   // The stylesheet is built but, like in the content script, not kept.

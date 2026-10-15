@@ -138,7 +138,8 @@ try {
   const lockDiff = page.locator(`#diff-${lock.pathDigest}`);
   await lockDiff.waitFor({ state: 'attached', timeout: 30_000 });
   const section = page.locator('[data-prune-ui="section"]');
-  await section.waitFor({ timeout: 20_000 });
+  // Attached right away, but empty until it comes near the viewport.
+  await section.waitFor({ state: 'attached', timeout: 20_000 });
   check('pruned diff is hidden', !(await lockDiff.isVisible()));
   check(
     'pruned file hidden in file tree',
@@ -148,6 +149,13 @@ try {
   await section.scrollIntoViewIfNeeded();
   await section.locator('.item').first().waitFor({ timeout: 5_000 }).catch(() => {});
   check('"Pruned files" section lists it', (await section.locator('.box').textContent())?.includes('pnpm-lock.yaml') ?? false);
+  const diffsAfter = await page.evaluate(() => {
+    const host = document.querySelector('[data-prune-ui="section"]')!;
+    return [...document.querySelectorAll('[id^="diff-"]')].filter(
+      (d) => /^diff-[0-9a-f]{64}$/.test(d.id) && host.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).length;
+  });
+  check('section comes after all diffs', diffsAfter === 0, `${diffsAfter} diffs after it`);
   const filesHeader = await readHeader(page);
   check(
     'files tab header counts are pruned too',
@@ -168,6 +176,74 @@ try {
   await page.waitForTimeout(1500);
   const back = await readHeader(page);
   check('header stays pruned after navigating back', back.additions === expected.additions, `got +${back.additions}`);
+
+  // ---- Reloads: the background script's stored file list ------------------------
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+  const storedKey = '|vitejs/vite#23648';
+  type Ext = { chrome: typeof browser };
+  const index = await worker.evaluate(async () => {
+    const stored = await (globalThis as unknown as Ext).chrome.storage.session.get('fileLists');
+    return stored.fileLists as Record<string, unknown> | undefined;
+  });
+  check('background script stored the file list', !!index?.[storedKey], Object.keys(index ?? {}).join(', '));
+  const reloadedHeader = async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(
+      () => document.querySelector('[data-prune-ui="indicator"]')?.shadowRoot?.querySelector('.pill.active'),
+      undefined,
+      { timeout: 20_000 },
+    );
+    let h = await readHeader(page);
+    for (let i = 0; i < 50 && h.additions !== expected.additions; i++) {
+      await page.waitForTimeout(100);
+      h = await readHeader(page);
+    }
+    return h;
+  };
+  const reloaded = await reloadedHeader();
+  check('pruned on reload (stored list)', reloaded.additions === expected.additions, `got +${reloaded.additions}`);
+  // The list is gone but its ETag is still indexed: the content script must send it after all.
+  await worker.evaluate(
+    (key) => (globalThis as unknown as Ext).chrome.storage.session.remove(`fileList:${key}`),
+    storedKey,
+  );
+  const refetched = await reloadedHeader();
+  check(
+    'pruned on reload when the stored list is gone',
+    refetched.additions === expected.additions,
+    `got +${refetched.additions}`,
+  );
+
+  // ---- Per-tab toggle and settings changes (kept and pushed by the background script) ----
+  const readUntil = async (want: number | null) => {
+    let h = await readHeader(page);
+    for (let i = 0; i < 50 && h.additions !== want; i++) {
+      await page.waitForTimeout(100);
+      h = await readHeader(page);
+    }
+    return h;
+  };
+  await pill.hover();
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.mouse.move(10, 900);
+  await page.waitForTimeout(300);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await pill.waitFor({ timeout: 20_000 });
+  const stillOff = await readUntil(total.additions);
+  check('switched off stays off on reload', stillOff.additions === total.additions, `got +${stillOff.additions}`);
+  await pill.hover();
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.mouse.move(10, 900);
+  const backOn = await readUntil(expected.additions);
+  check('switched back on', backOn.additions === expected.additions, `got +${backOn.additions}`);
+  const setSettings = (settings: object) =>
+    worker.evaluate((s) => (globalThis as unknown as Ext).chrome.storage.local.set({ settings: s }), settings);
+  await setSettings({ disabledGroups: ['lockfiles'] });
+  const unpruned = await readUntil(total.additions);
+  check('settings changes reach the page', unpruned.additions === total.additions, `got +${unpruned.additions}`);
+  await setSettings({});
+  const repruned = await readUntil(expected.additions);
+  check('…and back', repruned.additions === expected.additions, `got +${repruned.additions}`);
 
   // ---- Repo page → PR (soft navigation) ----------------------------------------
   // PRune does nothing PR-specific on other pages (no settings, no UI) until a
@@ -200,6 +276,21 @@ try {
     fromRepo.additions === expected.additions,
     `got +${fromRepo.additions}`,
   );
+
+  // ---- And back and forth (history traversal) -----------------------------------
+  // Off PR pages the full script only follows navigations, without observing the page.
+  await page.goBack();
+  await page.waitForURL((u) => u.pathname === '/vitejs/vite');
+  await page.waitForTimeout(1000);
+  check('indicator leaves with the PR', !(await page.locator('[data-prune-ui="indicator"]').isVisible()));
+  await page.goForward();
+  await page.waitForURL(/\/pull\/23648$/);
+  let forward = await readHeader(page);
+  for (let i = 0; i < 50 && forward.additions !== expected.additions; i++) {
+    await page.waitForTimeout(100);
+    forward = await readHeader(page);
+  }
+  check('PR is pruned again after going forward', forward.additions === expected.additions, `got +${forward.additions}`);
 
   check('no PRune errors in console', errors.length === 0, errors.join('; '));
 } finally {

@@ -1,5 +1,7 @@
 import { REPO_CONFIG_PATHS } from '../shared/defaults.ts';
 import type { PrTotals } from '../shared/filetree.ts';
+import { PR_PATH } from './route.ts';
+import type { RepoConfig } from '../shared/messages.ts';
 
 export interface PrRef {
   owner: string;
@@ -16,8 +18,6 @@ export interface PrRef {
   /** True on the "Files changed" tab only (the whole PR's diff). */
   isFilesTab: boolean;
 }
-
-const PR_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/([^/]+)(\/[^/]+)?)?/;
 
 export function parsePrUrl(pathname: string): PrRef | null {
   const m = PR_PATH.exec(pathname);
@@ -47,22 +47,18 @@ const JSON_HEADERS = {
  * far cheaper than downloading the diff (no file contents, ~250 bytes/file).
  * GitHub caps the list at 3000 files, the same limit as its UI and API.
  *
- * Returned as text: parsing and matching happen in the background script,
- * off the page's main thread (see shared/prune.ts).
+ * The body is left unread: parsing and matching happen in the background
+ * script (see shared/prune.ts), and if it already has this exact list (same
+ * ETag) the body isn't needed at all.
  */
-export async function fetchFileTree(pr: PrRef, signal?: AbortSignal): Promise<string> {
+export async function fetchFileTree(pr: PrRef, signal?: AbortSignal): Promise<Response> {
   const res = await fetch(`${pr.basePath}/page_data/file_tree`, {
     headers: JSON_HEADERS,
     credentials: 'same-origin',
     signal,
   });
   if (!res.ok) throw new Error(`file_tree request failed: HTTP ${res.status}`);
-  return res.text();
-}
-
-export interface RepoConfig {
-  path: string | null;
-  text: string | null;
+  return res;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { parsePrUrl } from '../src/content/github.ts';
+import { PR_MATCH } from '../src/content/route.ts';
 import { PrFileList } from '../src/shared/filetree.ts';
 
 test('parses PR URLs on every tab', () => {
@@ -25,6 +26,19 @@ test('ignores non-PR pages', () => {
   expect(parsePrUrl('/a/b/issues/1')).toBeNull();
 });
 
+test("the manifest's PR match pattern covers every PR URL", () => {
+  // Match pattern → regex: `*` matches anything, including slashes.
+  const pattern = new RegExp(`^${PR_MATCH.replace(/[.?+^$()[\]{}|\\/]/g, '\\$&').replaceAll('*', '.*')}$`);
+  const paths = ['/a/b/pull/1', '/a/b/pull/1/files', '/a/b/pull/1/changes', '/a/b/pull/1/commits/abc', '/a.b/c-d/pull/9'];
+  for (const path of paths) {
+    expect(parsePrUrl(path)).not.toBeNull();
+    expect(pattern.test(`https://github.com${path}`)).toBe(true);
+  }
+  // The loader handles everything else, and must not be skipped there.
+  expect(pattern.test('https://github.com/a/b/pulls')).toBe(false);
+  expect(pattern.test('https://github.com/a/b')).toBe(false);
+});
+
 test('PrFileList stores files column-wise and gives them back', () => {
   const files = ['a.ts', 'dir/b.lock'].map((path, i) => ({
     path,
@@ -38,4 +52,18 @@ test('PrFileList stores files column-wise and gives them back', () => {
   expect(list.path(1)).toBe('dir/b.lock');
   expect(list.digest(1)).toBe(files[1]!.digest);
   expect([list.get(0), list.get(1)]).toEqual(files);
+});
+
+test('PrFileList survives a round trip through extension storage', () => {
+  const files = ['a.ts', 'dist/b.js', 'c.md'].map((path, i) => ({
+    path,
+    digest: Bun.CryptoHasher.hash('sha256', path, 'hex'),
+    additions: i * 7,
+    deletions: i + 2,
+    generated: i === 1,
+  }));
+  const stored = JSON.parse(JSON.stringify(PrFileList.of(files).toStored()));
+  const list = PrFileList.fromStored(stored);
+  expect(list.length).toBe(3);
+  expect([0, 1, 2].map((i) => list.get(i))).toEqual(files);
 });
