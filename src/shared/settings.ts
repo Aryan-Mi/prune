@@ -84,10 +84,18 @@ export async function loadRemoteCache(): Promise<RemoteCache | null> {
   return value && typeof value.text === 'string' ? value : null;
 }
 
-/** Calls `listener` whenever settings or the remote rule cache change. */
-export function onConfigChanged(listener: (remoteChanged: boolean) => void): void {
+/**
+ * Calls `listener` whenever settings or the remote rule cache change, saying
+ * whether files may be pruned differently now.
+ */
+export function onConfigChanged(listener: (rulesChanged: boolean) => void): void {
   ext.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && (SETTINGS_KEY in changes || REMOTE_KEY in changes)) listener(REMOTE_KEY in changes);
+    if (area !== 'local' || !(SETTINGS_KEY in changes || REMOTE_KEY in changes)) return;
+    const change = changes[SETTINGS_KEY];
+    listener(
+      REMOTE_KEY in changes ||
+        (!!change && rulesKey(normalizeSettings(change.oldValue)) !== rulesKey(normalizeSettings(change.newValue))),
+    );
   });
 }
 
@@ -97,6 +105,13 @@ export function rulesKey(settings: Settings): string {
   return JSON.stringify([disabledGroups, userPatterns, useRepoConfig, respectLinguistGenerated, remoteUrl]);
 }
 
-export function isRepoDisabled(settings: Settings, repo: string): boolean {
+/** What PR pages need of the settings; the rules are applied in the background script. */
+export type PageSettings = Pick<Settings, 'enabled' | 'diffMode' | 'treeMode' | 'disabledRepos'>;
+
+export function pageSettings({ enabled, diffMode, treeMode, disabledRepos }: Settings): PageSettings {
+  return { enabled, diffMode, treeMode, disabledRepos };
+}
+
+export function isRepoDisabled(settings: Pick<Settings, 'disabledRepos'>, repo: string): boolean {
   return settings.disabledRepos.includes(repo.toLowerCase());
 }

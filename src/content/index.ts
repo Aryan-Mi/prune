@@ -2,13 +2,14 @@ import { ext } from '../shared/browser.ts';
 import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, rulesKey, type Settings } from '../shared/settings.ts';
+import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
+import { applyTotals, isCapped } from '../shared/totals.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
-import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef } from './github.ts';
+import { fetchFileTree, fetchPrTotals, fetchRepoConfig, mayBeCapped, parsePrUrl, type PrRef } from './github.ts';
 import { Indicator } from './ui/indicator.ts';
 import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
@@ -39,9 +40,10 @@ interface PrData {
 interface PrResponses {
   /** The file_tree response, body unread. */
   fileTree: Response;
-  /** ETag of the file list the background script has stored for this PR. */
+  /** ETag of the file list the background script has a result for. */
   storedEtag: string | null;
-  totals: Partial<PrTotals>;
+  /** GitHub's totals, requested along with the list if it may well be capped (see isCapped()). */
+  totals: Promise<Partial<PrTotals> | null>;
   repo: RepoConfig;
   repoFetched: boolean;
 }
@@ -53,7 +55,7 @@ interface CacheEntry<T> {
 
 class Controller implements UiActions {
   /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
-  private settings!: Settings;
+  private settings!: PageSettings;
   private configured = false;
   private configuring = false;
   private pr: PrRef | null = null;
@@ -105,7 +107,7 @@ class Controller implements UiActions {
         this.setActive(msg.active);
         sendResponse(this.tabStatus());
       } else if (msg.type === 'config-changed') {
-        this.onConfigChanged(msg.settings, msg.remoteChanged);
+        this.onConfigChanged(msg.settings, msg.rulesChanged);
         sendResponse(null);
       }
       return undefined;
@@ -146,11 +148,10 @@ class Controller implements UiActions {
       .catch((err: unknown) => console.error('[PRune]', err));
   }
 
-  private onConfigChanged(settings: Settings, remoteChanged: boolean): void {
+  private onConfigChanged(settings: PageSettings, rulesChanged: boolean): void {
     if (!this.configured) return;
-    const rules = rulesKey(this.settings);
     this.settings = settings;
-    if (remoteChanged || rulesKey(settings) !== rules) {
+    if (rulesChanged) {
       // Results are only kept for the pruned files, so prune again from scratch.
       this.prCache.clear();
       if (this.pr) this.load(this.pr);
@@ -372,9 +373,9 @@ class Controller implements UiActions {
    * Fetches the PR's file list here (same-origin, so private repos work) and
    * has the background script parse and prune it. On a 3000-file PR that is a
    * 700 KB JSON response; the page never parses it or keeps any of it, and
-   * gets back only the pruned files. If the background script already has
-   * this exact list (from an earlier visit; GitHub's ETag says so), the
-   * response isn't even read, let alone passed along.
+   * gets back only the pruned files. If the background script already has a
+   * result for this exact list (from an earlier visit; GitHub's ETag says so),
+   * the response isn't even read, let alone passed along.
    */
   private prData(pr: PrRef): Promise<PrData> {
     let entry = this.prCache.get(pr.key);
@@ -389,6 +390,7 @@ class Controller implements UiActions {
         // Not stored (any more): send the list over.
         else result = await prune(pr, responses, await res.text(), etag);
         if (!result) throw new Error('Could not prune this pull request');
+        if (isCapped(result)) result = applyTotals(result, (await responses.totals) ?? (await fetchPrTotals(pr)));
         return { key: pr.key, result, repoConfigPath: responses.repo.path };
       });
       entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
@@ -402,9 +404,10 @@ class Controller implements UiActions {
     return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
       async (): Promise<Lookup> => ({
         // Not reachable right now: fetch everything, and read settings here.
-        settings: this.configured ? this.settings : await loadSettings(),
+        settings: this.configured ? this.settings : pageSettings(await loadSettings()),
         inactive: [],
         etag: null,
+        capped: false,
         repo: null,
       }),
     );
@@ -412,12 +415,15 @@ class Controller implements UiActions {
 
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
   private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
+    const fileTree = fetchFileTree(pr);
+    const totals = Promise.all([fileTree, lookup])
+      .then(([res, { capped }]) => (capped || mayBeCapped(res) ? fetchPrTotals(pr) : null))
+      .catch(() => null);
     return Promise.all([
-      fetchFileTree(pr),
-      fetchPrTotals(pr),
+      fileTree,
       lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
       lookup,
-    ]).then(([fileTree, totals, repo, stored]) => ({
+    ]).then(([fileTree, repo, stored]) => ({
       fileTree,
       storedEtag: stored.etag,
       totals,
@@ -721,7 +727,7 @@ function findDiffstatFallback(): Element | null {
 
 function prune(
   pr: PrRef,
-  { totals, repo, repoFetched }: PrResponses,
+  { repo, repoFetched }: PrResponses,
   fileTree: string | null,
   etag: string | null,
 ): Promise<PruneResult | null> {
@@ -731,10 +737,24 @@ function prune(
     repoKey: pr.repoKey,
     fileTree,
     etag,
-    totals,
     repo,
     repoFetched,
-  });
+  }).then((result) => result && shareStrings(result));
+}
+
+/**
+ * Messages arrive with a copy of every string, but the pruned files' rules
+ * and sources repeat (hundreds of files under one `vendor/` rule): keeps one
+ * of each, the rest is garbage right away.
+ */
+function shareStrings(result: PruneResult): PruneResult {
+  const strings = new Map<string, string>();
+  const share = (s: string): string => strings.get(s) ?? (strings.set(s, s), s);
+  for (const file of result.pruned) {
+    file.rule = share(file.rule);
+    file.source = share(file.source);
+  }
+  return result;
 }
 
 /** Lets go of a response that won't be read. */

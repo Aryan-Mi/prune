@@ -1,5 +1,5 @@
 import { ext } from '../shared/browser.ts';
-import { parseFileTree, type PrFileList } from '../shared/filetree.ts';
+import { parseFileTree } from '../shared/filetree.ts';
 import type { Lookup, Message } from '../shared/messages.ts';
 import { parseRules } from '../shared/matcher.ts';
 import { computePrune, type PruneResult } from '../shared/prune.ts';
@@ -8,16 +8,19 @@ import {
   loadRemoteCache,
   loadSettings,
   onConfigChanged,
+  pageSettings,
   REMOTE_KEY,
   REMOTE_TTL_MS,
+  rulesKey,
   type RemoteCache,
 } from '../shared/settings.ts';
 import {
   cachePartition,
-  loadFileList,
-  saveFileList,
+  loadResult,
+  rulesFingerprint,
   saveRepoConfig,
-  storedEtag,
+  saveResult,
+  stored,
   storedRepoConfig,
 } from './cache.ts';
 import { notifyTabs, openTab, setInactive } from './tabs.ts';
@@ -83,44 +86,47 @@ function refreshOnce(force = false): Promise<RemoteCache | null> {
  */
 async function lookup(msg: Extract<Message, { type: 'lookup' }>, sender: browser.runtime.MessageSender): Promise<Lookup> {
   const partition = cachePartition(sender);
-  const [inactive, settings, etag, repo] = await Promise.all([
+  const [inactive, settings, entry, repo] = await Promise.all([
     openTab(sender.tab?.id),
     loadSettings(),
-    partition === null ? null : storedEtag(partition + msg.key),
+    partition === null ? null : stored(partition + msg.key),
     partition === null ? null : storedRepoConfig(partition + msg.repoKey),
   ]);
-  return { settings, inactive, etag, repo: settings.useRepoConfig ? repo : { path: null, text: null } };
+  return {
+    settings: pageSettings(settings),
+    inactive,
+    etag: entry?.etag ?? null,
+    capped: !!entry?.capped,
+    repo: settings.useRepoConfig ? repo : { path: null, text: null },
+  };
 }
 
 /**
  * Parses and prunes a PR's file list for a content script. This is the bulk
  * of PRune's work on a big PR (a 700 KB response with 3000 files), and doing
  * it here keeps it off the GitHub page's main thread and out of its memory:
- * the page only gets the pruned files back. Replies null when asked to use a
- * stored list that is gone by now; the content script then sends it.
+ * the page only gets the pruned files back. A stored result for the same
+ * list and rules is reused as is. Replies null when asked for a stored
+ * result that is gone by now or for other rules; the content script then
+ * sends the list.
  */
 async function prune(msg: Extract<Message, { type: 'prune' }>, partition: string | null): Promise<PruneResult | null> {
   const key = partition === null ? null : partition + msg.key;
-  let files: PrFileList | null;
-  if (msg.fileTree === null) {
-    files = key !== null && msg.etag ? await loadFileList(key, msg.etag) : null;
-    if (!files) return null;
-  } else {
-    files = parseFileTree(msg.fileTree);
-    if (key !== null && msg.etag) saveFileList(key, msg.etag, files).catch(() => {});
-  }
   if (partition !== null && msg.repoFetched) saveRepoConfig(partition + msg.repoKey, msg.repo).catch(() => {});
   const [settings, remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
   if (settings.remoteUrl && (remote?.url !== settings.remoteUrl || Date.now() - remote.fetchedAt > REMOTE_TTL_MS)) {
     // Content scripts reload when the new copy lands in storage.
     refreshOnce().catch(() => {});
   }
-  const rules = compileRules(settings, {
-    repoText: msg.repo.text,
-    repoPath: msg.repo.path,
-    remoteText: remote?.url === settings.remoteUrl ? remote.text : null,
-  });
-  return computePrune(files, msg.totals, rules, settings);
+  const remoteText = remote?.url === settings.remoteUrl ? remote.text : null;
+  const rules = key === null ? '' : await rulesFingerprint(rulesKey(settings), msg.repo, remoteText);
+  if (msg.fileTree === null) return key !== null && msg.etag ? loadResult(key, msg.etag, rules) : null;
+
+  const compiled = compileRules(settings, { repoText: msg.repo.text, repoPath: msg.repo.path, remoteText });
+  // GitHub's totals are up to the content script, for capped lists.
+  const result = computePrune(parseFileTree(msg.fileTree), {}, compiled, settings);
+  if (key !== null && msg.etag) saveResult(key, msg.etag, rules, result).catch(() => {});
+  return result;
 }
 
 // Respond via sendResponse + `return true`: works in Firefox and in every
@@ -141,9 +147,9 @@ ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: u
 });
 
 // Content scripts don't read settings themselves (see tabs.ts).
-onConfigChanged((remoteChanged) => {
+onConfigChanged((rulesChanged) => {
   loadSettings()
-    .then((settings) => notifyTabs({ type: 'config-changed', settings, remoteChanged }))
+    .then((settings) => notifyTabs({ type: 'config-changed', settings: pageSettings(settings), rulesChanged }))
     .catch(() => {});
 });
 
