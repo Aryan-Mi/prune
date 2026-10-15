@@ -20,6 +20,11 @@ export class Collapser {
     }
   }
 
+  /** Some pruned file's diff has not appeared yet. */
+  get waiting(): boolean {
+    return this.pending.length > 0;
+  }
+
   /** Cheap to call often: only looks up files that have not been collapsed yet. */
   run(): void {
     if (this.pending.length === 0) return;

@@ -88,6 +88,26 @@ export class CountPatcher {
   }
 
   /**
+   * Where the counters render: the header landmarks and the elements that held
+   * the counters found (all small). A counter that (re-)renders later changes
+   * one of their subtrees.
+   */
+  places(): Element[] {
+    const places: Element[] = [];
+    for (const el of [...landmarks(), ...this.holders]) {
+      if (!el.isConnected || places.some((p) => p.contains(el))) continue;
+      for (let i = places.length - 1; i >= 0; i--) if (el.contains(places[i]!)) places.splice(i, 1);
+      places.push(el);
+    }
+    return places;
+  }
+
+  /** The patched nodes (text nodes, elements with a patched attribute). */
+  patched(): Node[] {
+    return [...this.texts.map((p) => p.node), ...this.attrs.map((p) => p.el)];
+  }
+
+  /**
    * Finds header counters showing `original` and makes them show `kept`.
    * Already-patched nodes are left alone, so calling this repeatedly is cheap
    * and causes no DOM writes when nothing new appeared.
@@ -397,7 +417,7 @@ function findTabLinks(roots: readonly Element[]): Set<Element> {
  * Free to look up; whatever they miss is searched for anyway. Each is small:
  * their common ancestor can hold the whole diff list.
  */
-function landmarks(): Element[] {
+export function landmarks(): Element[] {
   const tab = document.getElementById('prs-files-anchor-tab');
   const counter = document.getElementById('files_tab_counter');
   const link = tab ? (tab.closest('[data-component="PH_Navigation"]') ?? tab) : (counter?.closest('a') ?? counter);
