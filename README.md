@@ -89,7 +89,7 @@ Performance was a design constraint from the start:
 - **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~1.5 ms, in the background script.
 - **Lazy UI.** Up front there is only the ✂ pill: a button, an icon and a short stylesheet. The popover and its styles are built on first open, and the "Pruned files" section is an empty placeholder until it scrolls near the viewport.
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 6–7 ms of the page's main-thread time in total on the conversation tab and 9–11 ms on the Files changed tab when the PR is reloaded or reopened (about 1.5 ms more the first time, to hand the file list over), no single task longer than ~3 ms, and keeps ~115–160 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms; ~2 ms for a stored list) runs in the extension's own process.
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 6–7 ms of the page's main-thread time in total on the conversation tab and 9–11 ms on the Files changed tab when the PR is reloaded or reopened (about 0.5 ms more the first time, to hand the file list over), no single task longer than ~3 ms, and keeps ~115–160 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms; next to nothing for a PR it has a result for) runs in the extension's own process.
 
 ## Development
 
