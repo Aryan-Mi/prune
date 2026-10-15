@@ -25,9 +25,11 @@ interface AttrPatch {
   patched: string;
 }
 
-const ADDITION_SELECTOR = '.fgColor-success, .color-fg-success';
+/** Diffstats are found by their deletion count (`+N` `−N` are siblings in both UIs): red text is far rarer than green. */
+const DELETION_CLASSES = ['fgColor-danger', 'color-fg-danger'];
+const DELETION_SELECTOR = '.fgColor-danger, .color-fg-danger';
+const ADDITION_CLASS = /\b(?:fgColor-success|color-fg-success)\b/;
 const FILES_LINK_SELECTOR = 'a[href$="/files"], a[href$="/changes"]';
-const DELETION_CLASS = /\b(?:fgColor-danger|color-fg-danger)\b/;
 const FILE_DIFF_ID = /^diff-[0-9a-f]{64}$/;
 const CAPPED_COUNT = /^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*\+[)\s]*$/;
 
@@ -36,6 +38,13 @@ export class CountPatcher {
   private attrs: AttrPatch[] = [];
   private patchedNodes = new WeakSet<Text>();
   private anchor: Element | null = null;
+  /**
+   * The smallest element holding every counter the last full search found
+   * (on GitHub, a small part of the PR header). Searched first next time.
+   */
+  private scope: Element | null = null;
+  /** The numbers last applied; when they change, the whole page is searched again. */
+  private values = '';
 
   /** Container of the primary header diffstat; the indicator is placed here. */
   get diffstatAnchor(): Element | null {
@@ -46,13 +55,15 @@ export class CountPatcher {
   private diffstatPatched = false;
   /** A full scan found nothing that a scan skipping the `bulk` regions missed. */
   private bulkChecked = false;
+  /** The last whole-page search did not find the "Files changed" counter. */
+  private counterMissed = false;
 
   /** Both the header diffstat and the "Files changed" counter were found and patched. */
   isComplete(): boolean {
     return this.isIntact() && this.diffstatPatched && this.counterPatched;
   }
 
-  /** True when every patch is still in the DOM and still shows our value. */
+  /** True when every patch is still in the DOM and still shows our value (also when there are none). */
   isIntact(): boolean {
     for (const p of this.texts) {
       if (!p.node.isConnected || p.node.nodeValue !== p.patched) return false;
@@ -60,28 +71,42 @@ export class CountPatcher {
     for (const p of this.attrs) {
       if (!p.el.isConnected || p.el.getAttribute(p.name) !== p.patched) return false;
     }
-    return this.texts.length > 0;
+    return true;
   }
 
   /**
    * Finds header counters showing `original` and makes them show `kept`.
    * Already-patched nodes are left alone, so calling this repeatedly is cheap
-   * and causes no DOM writes when nothing new appeared. `bulk` (see regions.ts)
-   * is searched only if something is not found elsewhere.
+   * and causes no DOM writes when nothing new appeared.
+   *
+   * Unless `full`, only the part of the header where the last full search
+   * found the counters is searched (a few dozen elements), and the whole page
+   * only if something is missing there. The whole page is searched without
+   * `bulk` (see regions.ts), which is searched only if something is not found
+   * elsewhere. Returns whether the whole page was searched.
    */
-  apply(basePath: string, original: PrTotals, kept: PrTotals, bulk: readonly Element[] = []): void {
+  apply(basePath: string, original: PrTotals, kept: PrTotals, bulk: () => readonly Element[], full = true): boolean {
     this.prune();
-    // One pass over the DOM for both kinds of counters.
-    const additions: Element[] = [];
-    const links: HTMLAnchorElement[] = [];
-    for (const el of queryOutside(`${ADDITION_SELECTOR}, ${FILES_LINK_SELECTOR}`, bulk)) {
-      if (el.localName === 'a' && el.matches(FILES_LINK_SELECTOR)) links.push(el as HTMLAnchorElement);
-      if (el.classList.contains('fgColor-success') || el.classList.contains('color-fg-success')) additions.push(el);
+    const values = `${original.additions} ${original.deletions} ${original.files} ${kept.additions} ${kept.deletions} ${kept.files}`;
+    if (values !== this.values) {
+      // Patches outside the scope need the new numbers too.
+      this.values = values;
+      full = true;
     }
-    this.scanDiffstats(original, kept, additions);
-    this.patchFileCounters(basePath, original.files, kept.files, links);
+    if (!full && this.scope?.isConnected) {
+      const scope = this.scope;
+      this.scan(basePath, original, kept, queryWithin(scope, DELETION_SELECTOR), queryWithin(scope, FILES_LINK_SELECTOR));
+      if (this.diffstatPatched && this.counterPatched) return false;
+    }
+    const regions = bulk();
+    const found = this.scan(basePath, original, kept, findDeletions(regions), findTabLinks(regions));
+    if (!this.counterPatched && (this.diffstatPatched || this.counterMissed)) {
+      // The header is there (or had time to render), but its "Files changed" link isn't in a tab bar.
+      found.push(...this.scan(basePath, original, kept, [], queryOutside(FILES_LINK_SELECTOR, regions)));
+    }
+    this.counterMissed = !this.counterPatched;
     if (
-      bulk.length > 0 &&
+      regions.length > 0 &&
       !this.bulkChecked &&
       !(this.diffstatPatched && this.counterPatched) &&
       // Before then, it is far more likely that the page hasn't rendered it yet.
@@ -89,16 +114,22 @@ export class CountPatcher {
     ) {
       // Something is missing. Make sure it is not in `bulk`; if it was, keep looking there.
       const patches = this.texts.length + this.attrs.length;
-      this.apply(basePath, original, kept);
+      found.push(
+        ...this.scan(basePath, original, kept, findDeletions([]), document.querySelectorAll(FILES_LINK_SELECTOR)),
+      );
       this.bulkChecked = this.texts.length + this.attrs.length === patches;
     }
+    this.scope = commonAncestor(found);
+    return true;
   }
 
   /** Finds the header diffstat without changing it (used when nothing is pruned). */
-  locate(original: PrTotals, bulk: readonly Element[] = []): Element | null {
-    if (!this.diffstatAnchor) this.scanDiffstats(original, null, queryOutside(ADDITION_SELECTOR, bulk));
-    if (!this.diffstatAnchor && bulk.length > 0 && !this.bulkChecked) {
-      this.scanDiffstats(original, null, document.querySelectorAll(ADDITION_SELECTOR));
+  locate(original: PrTotals, bulk: () => readonly Element[]): Element | null {
+    if (this.diffstatAnchor) return this.diffstatAnchor;
+    const regions = bulk();
+    this.scanDiffstats(original, null, findDeletions(regions), []);
+    if (!this.diffstatAnchor && regions.length > 0 && !this.bulkChecked) {
+      this.scanDiffstats(original, null, findDeletions([]), []);
       this.bulkChecked = !this.diffstatAnchor;
     }
     return this.diffstatAnchor;
@@ -115,9 +146,18 @@ export class CountPatcher {
     this.attrs = [];
     this.patchedNodes = new WeakSet();
     this.anchor = null;
+    this.scope = null;
+    this.values = '';
     this.counterPatched = false;
     this.diffstatPatched = false;
     this.bulkChecked = false;
+    this.counterMissed = false;
+  }
+
+  /** Makes the next `apply()` search the whole page (e.g. another tab of the PR is showing). */
+  rescope(): void {
+    this.scope = null;
+    this.counterMissed = false;
   }
 
   /** Drops bookkeeping for nodes GitHub removed or rewrote. */
@@ -132,12 +172,27 @@ export class CountPatcher {
     this.diffstatPatched = false;
   }
 
-  private scanDiffstats(original: PrTotals, kept: PrTotals | null, additions: Iterable<Element>): void {
+  /** Patches the counters among the candidates; returns the elements of those it found. */
+  private scan(
+    basePath: string,
+    original: PrTotals,
+    kept: PrTotals,
+    deletions: Iterable<Element>,
+    links: Iterable<Element>,
+  ): Element[] {
+    const found: Element[] = [];
+    this.scanDiffstats(original, kept, deletions, found);
+    this.patchFileCounters(basePath, original.files, kept.files, links as Iterable<HTMLAnchorElement>, found);
+    return found;
+  }
+
+  /** Finds diffstats by their deletion count (`deletions`, in document order). */
+  private scanDiffstats(original: PrTotals, kept: PrTotals | null, deletions: Iterable<Element>, found: Element[]): void {
     let first: Element | null = null;
-    for (const add of additions) {
-      // Cheapest test first: most matches are other green text, not a diffstat.
-      const del = add.nextElementSibling;
-      if (!del || !DELETION_CLASS.test(del.getAttribute('class') ?? '')) continue;
+    for (const del of deletions) {
+      // Cheapest test first: most matches are other red text, not a diffstat.
+      const add = del.previousElementSibling;
+      if (!add || !ADDITION_CLASS.test(add.getAttribute('class') ?? '')) continue;
       if (insideFileDiff(add) || add.closest('[data-prune-ui]')) continue;
       const addNode = numberNode(add);
       const delNode = numberNode(del);
@@ -152,6 +207,7 @@ export class CountPatcher {
       first ??= add.parentElement;
       if (!kept) continue;
 
+      found.push(del.parentElement ?? del);
       this.patchText(addNode, kept.additions);
       this.patchText(delNode, kept.deletions);
       this.diffstatPatched = true;
@@ -178,27 +234,34 @@ export class CountPatcher {
     if (!this.diffstatAnchor) this.anchor = first;
   }
 
-  private patchFileCounters(basePath: string, original: number, kept: number, links: Iterable<HTMLAnchorElement>): void {
-    const targets = new Set([`${basePath}/files`, `${basePath}/changes`]);
+  private patchFileCounters(
+    basePath: string,
+    original: number,
+    kept: number,
+    links: Iterable<HTMLAnchorElement>,
+    found: Element[],
+  ): void {
     for (const link of links) {
-      if (!targets.has(link.pathname)) continue;
+      const path = link.pathname;
+      if (path !== `${basePath}/files` && path !== `${basePath}/changes`) continue;
+      let counter = false;
       const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
         if (this.patchedNodes.has(node)) {
-          this.counterPatched = true;
+          counter = true;
           continue;
         }
         const text = node.nodeValue ?? '';
         if (CAPPED_COUNT.test(text)) {
           // GitHub shows e.g. "5,000+" on huge PRs: nothing to patch, and nothing missing.
-          this.counterPatched = true;
+          counter = true;
           continue;
         }
         // Only bare counters like "38" or " (38)" — never labels.
         if (!/^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*[)\s]*$/.test(text)) continue;
         if (parseCount(text) !== original) continue;
         this.patchText(node, kept);
-        this.counterPatched = true;
+        counter = true;
       }
       for (const el of link.querySelectorAll('[title]')) {
         const title = el.getAttribute('title')!;
@@ -209,6 +272,10 @@ export class CountPatcher {
             el.setAttribute('title', patched);
           }
         }
+      }
+      if (counter) {
+        this.counterPatched = true;
+        found.push(link);
       }
     }
   }
@@ -235,6 +302,44 @@ export class CountPatcher {
     this.patchedNodes.add(node);
     if (patched !== original) node.nodeValue = patched;
   }
+}
+
+/*
+ * Whole-page searches use one class or tag name per query: browsers answer
+ * those from a fast path that is several times cheaper than a selector list
+ * (on a 5,000-element page ~30 µs instead of ~230 µs).
+ */
+
+/** Elements with a deletion class outside `skip`, in document order. */
+function findDeletions(skip: readonly Element[]): Element[] {
+  const [a, b] = DELETION_CLASSES.map((name) => [...queryOutside(`.${name}`, skip)]) as [Element[], Element[]];
+  if (a.length === 0 || b.length === 0) return a.length === 0 ? b : a;
+  return [...new Set([...a, ...b])].sort((x, y) => (x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+}
+
+/** "Files changed" links in the page's tab bars (`<nav>`; both UIs) outside `skip`. */
+function findTabLinks(skip: readonly Element[]): Set<Element> {
+  const links = new Set<Element>();
+  for (const nav of queryOutside('nav', skip)) {
+    // A nav around the file tree is not a tab bar.
+    if (skip.some((region) => nav.contains(region))) continue;
+    for (const link of nav.querySelectorAll(FILES_LINK_SELECTOR)) links.add(link);
+  }
+  return links;
+}
+
+/** `root` and its descendants that match `selector`, in document order. */
+function queryWithin(root: Element, selector: string): Element[] {
+  const found = [...root.querySelectorAll(selector)];
+  if (root.matches(selector)) found.unshift(root);
+  return found;
+}
+
+/** The deepest element containing all of `els`; null if that is <body> or above (no point scoping). */
+function commonAncestor(els: readonly Element[]): Element | null {
+  let common: Element | null = els[0] ?? null;
+  for (const el of els) while (common && !common.contains(el)) common = common.parentElement;
+  return common && common !== document.body && common !== document.documentElement ? common : null;
 }
 
 /** The text node that holds the digits inside `el`. */
