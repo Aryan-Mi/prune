@@ -29,14 +29,6 @@ const CSS = /* css */ `
 @media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
 `;
 
-/**
- * The box is only built once it has stayed in place this long. Until then
- * GitHub may still be loading diffs (the classic UI's first batch is a list of
- * its own), and the box moves after them once the controller notices, about a
- * second later.
- */
-const SETTLE_MS = 1000;
-
 /** Whether the box is expanded. Outlives the section, which is recreated per PR page visit. */
 let open = true;
 
@@ -55,77 +47,26 @@ interface Box {
 }
 
 /**
- * "Pruned files" box appended after the last file in the diff list (hide
- * mode). Lists hidden files and lets you reveal any of them in place.
- *
- * Nothing but an empty host is built until it comes near the viewport: at the
- * end of a long diff, most visits never get there. Afterwards, renders update
- * the box in place.
+ * The "Pruned files" box (see section.ts, which places it): lists the hidden
+ * files and lets you reveal any of them in place. A chunk of its own (see
+ * chunks.ts), imported once the section comes near the viewport. Renders
+ * update the box in place.
  */
-export class PrunedSection implements EventListenerObject {
-  readonly host: HTMLElement;
+export class SectionBox implements EventListenerObject {
+  private readonly host: HTMLElement;
+  private readonly actions: UiActions;
   private state: ViewState | null = null;
-  /** The box has been near the viewport, so it is rendered. */
-  private near = false;
-  private nearby: IntersectionObserver | null = null;
-  private nearTimer = 0;
-  /** When the host was last (re)placed. */
-  private movedAt = 0;
   private ui: Box | null = null;
 
-  private readonly actions: UiActions;
-
-  constructor(actions: UiActions) {
+  constructor(host: HTMLElement, actions: UiActions) {
+    this.host = host;
     this.actions = actions;
-    this.host = document.createElement('div');
-    this.host.dataset.pruneUi = 'section';
-  }
-
-  /** Appends the section after the diff list; a no-op when already in place. */
-  mount(container: Element): void {
-    if (this.host.parentElement !== container || container.lastElementChild !== this.host) {
-      container.append(this.host);
-      this.movedAt = performance.now();
-    }
-    if (!this.near && !this.nearby) {
-      this.nearby = new IntersectionObserver(
-        (entries) => {
-          clearTimeout(this.nearTimer);
-          if (entries.at(-1)?.isIntersecting) this.whenSettled();
-        },
-        { rootMargin: '1000px 0px' },
-      );
-      this.nearby.observe(this.host);
-    }
-  }
-
-  unmount(): void {
-    this.host.remove();
-    this.stopWatching();
-  }
-
-  /** Near the viewport: builds the box once it has stayed in place (moving it far away cancels this). */
-  private whenSettled(): void {
-    const wait = this.movedAt + SETTLE_MS - performance.now();
-    if (wait > 0) {
-      this.nearTimer = window.setTimeout(() => this.whenSettled(), wait);
-      return;
-    }
-    this.stopWatching();
-    this.near = true;
-    if (this.state) this.render(this.state);
-  }
-
-  private stopWatching(): void {
-    clearTimeout(this.nearTimer);
-    this.nearby?.disconnect();
-    this.nearby = null;
   }
 
   render(state: ViewState): void {
     this.state = state;
     const result = state.result;
-    if (!result || !this.near) return;
+    if (!result) return;
     const ui = (this.ui ??= this.build());
     ui.box.classList.toggle('open', open);
     ui.title.setAttribute('aria-expanded', String(open));

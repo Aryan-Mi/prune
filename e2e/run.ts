@@ -107,8 +107,15 @@ try {
   );
   check('files changed counter excludes it', header.files === expected.files, `got ${header.files}, want ${expected.files}`);
 
-  await pill.hover();
+  // The popover is a chunk of its own: the focus event waits for it to be imported.
   const popover = page.locator('[data-prune-ui="indicator"] >> .popover');
+  await pill.focus();
+  const focused = await popover.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false);
+  check('focusing the pill opens the popover', focused);
+  await page.keyboard.press('Escape');
+  check('Escape closes it', await popover.waitFor({ state: 'hidden', timeout: 5_000 }).then(() => true, () => false));
+
+  await pill.hover();
   await popover.waitFor({ state: 'visible' });
   check('popover lists the lockfile', (await popover.textContent())?.includes('pnpm-lock.yaml') ?? false);
   await page.screenshot({ path: join(outDir, 'conversation-popover.png') });
@@ -244,6 +251,24 @@ try {
   await setSettings({});
   const repruned = await readUntil(expected.additions);
   check('…and back', repruned.additions === expected.additions, `got +${repruned.additions}`);
+
+  // ---- Collapse mode (a chunk of its own, imported when the setting is on) ------
+  await setSettings({ diffMode: 'collapse' });
+  await page.goto(`${PR}/files`, { waitUntil: 'domcontentloaded' });
+  await lockDiff.waitFor({ state: 'attached', timeout: 30_000 });
+  const collapsed = await page
+    .waitForFunction(
+      (id) =>
+        !!document
+          .getElementById(id)
+          ?.querySelector('button[aria-label="Expand file"], .file-header .js-details-target[aria-expanded="false"]'),
+      `diff-${lock.pathDigest}`,
+      { timeout: 20_000 },
+    )
+    .then(() => true, () => false);
+  check('collapse mode collapses the pruned diff', collapsed && (await lockDiff.isVisible()));
+  check('…and lists no "Pruned files" section', (await page.locator('[data-prune-ui="section"]').count()) === 0);
+  await setSettings({});
 
   // ---- Repo page → PR (soft navigation) ----------------------------------------
   // PRune does nothing PR-specific on other pages (no settings, no UI) until a

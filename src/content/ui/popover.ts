@@ -1,37 +1,7 @@
 import { formatCount } from '../../shared/format.ts';
-import {
-  BASE_CSS,
-  el,
-  icon,
-  ICON_GEAR,
-  ICON_SCISSORS,
-  LIST_CSS,
-  pathElement,
-  statElement,
-  styleElement,
-  whyElement,
-} from './theme.ts';
+import { el, icon, ICON_GEAR, ICON_SCISSORS, LIST_CSS, pathElement, statElement, styleElement, whyElement } from './theme.ts';
 import type { UiActions, ViewState } from './types.ts';
 
-const PILL_CSS = /* css */ `
-:host { display: inline-flex; vertical-align: middle; margin-left: 8px; }
-:host(.floating) { position: fixed; right: 16px; bottom: 16px; z-index: 100; margin: 0; }
-:host(.floating) .pill { box-shadow: var(--shadow-floating-small, 0 1px 3px #0002); background: var(--p-bg); }
-.pill {
-  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 6px;
-  border-radius: 999px; border: 1px solid var(--p-border); background: transparent;
-  color: var(--p-muted); cursor: pointer; font-size: 12px; font-weight: 500; line-height: 20px;
-  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
-}
-.pill:hover, .pill[aria-expanded="true"] { background: var(--p-hover); color: var(--p-fg); }
-.pill.active { color: var(--p-done); border-color: color-mix(in srgb, var(--p-done) 40%, transparent); background: var(--p-done-bg); }
-.pill.active:hover, .pill.active[aria-expanded="true"] { background: color-mix(in srgb, var(--p-done) 18%, transparent); }
-.pill.loading .icon { opacity: .5; }
-.pill .icon { width: 14px; height: 14px; }
-@media (prefers-reduced-motion: reduce) { .pill { transition: none; } }
-`;
-
-/** Added with the popover, on first open. */
 const POPOVER_CSS = /* css */ `
 .popover {
   position: fixed; inset: auto; margin: 0; padding: 0; width: 380px; max-width: calc(100vw - 16px);
@@ -83,51 +53,44 @@ const POPOVER_CSS = /* css */ `
 const OPEN_DELAY = 120;
 const CLOSE_DELAY = 220;
 
-/**
- * The pill shown next to the PR's line counts. Hovering opens a popover with
- * the pruned file list and an on/off switch; clicking pins it open.
- *
- * Only the pill is built up front (a button, an icon and a short stylesheet);
- * the popover and its styles are added on first open. The indicator itself is
- * the one event listener for everything (`handleEvent`).
- */
-export class Indicator implements EventListenerObject {
+/** The parts of the ✂ pill (indicator.ts) the popover hangs off. */
+export interface Pill {
   readonly host: HTMLElement;
-  private readonly root: ShadowRoot;
-  private readonly pill: HTMLButtonElement;
-  private readonly label: HTMLSpanElement;
+  readonly root: ShadowRoot;
+  readonly pill: HTMLButtonElement;
+}
+
+/**
+ * The ✂ pill's popover: the pruned file list and an on/off switch. Hovering
+ * the pill opens it; clicking pins it open.
+ *
+ * A chunk of its own (see chunks.ts), imported the first time the pointer
+ * reaches the pill or it gets focus, and built on first open. The pill hands
+ * over its events (`pillEvent`); the popover is the one listener for the rest
+ * (`handleEvent`).
+ */
+export class Popover implements EventListenerObject {
+  private readonly ui: Pill;
+  private readonly actions: UiActions;
   private popover: HTMLDivElement | null = null;
-  private state: ViewState | null = null;
-  /** What the pill currently shows, to skip DOM writes when nothing changed. */
-  private shown = '';
+  private state: ViewState | null;
   private pinned = false;
   private openTimer = 0;
   private closeTimer = 0;
   private dirty = true;
 
-  private readonly actions: UiActions;
-
-  constructor(actions: UiActions) {
+  constructor(ui: Pill, actions: UiActions, state: ViewState | null) {
+    this.ui = ui;
     this.actions = actions;
-    this.host = document.createElement('span');
-    this.host.dataset.pruneUi = 'indicator';
-    this.root = this.host.attachShadow({ mode: 'open' });
-    this.pill = el('button', 'pill');
-    this.pill.type = 'button';
-    this.pill.setAttribute('aria-haspopup', 'dialog');
-    this.pill.setAttribute('aria-expanded', 'false');
-    this.label = el('span', 'label');
-    this.pill.append(icon(ICON_SCISSORS), this.label);
-    this.root.append(styleElement(BASE_CSS + PILL_CSS), this.pill);
-    for (const type of ['pointerenter', 'pointerleave', 'focus', 'click']) this.pill.addEventListener(type, this);
-    this.root.addEventListener('keydown', this);
+    this.state = state;
+    ui.root.addEventListener('keydown', this);
   }
 
-  handleEvent(e: Event): void {
-    switch (e.type) {
+  /** An event on the pill, which happened at `at` (`performance.now()`): it may have waited for this chunk. */
+  pillEvent(type: string, at: number): void {
+    switch (type) {
       case 'pointerenter':
-        if (e.currentTarget === this.pill) this.scheduleOpen();
-        else clearTimeout(this.closeTimer);
+        this.scheduleOpen(OPEN_DELAY - (performance.now() - at));
         break;
       case 'pointerleave':
         this.scheduleClose();
@@ -136,19 +99,29 @@ export class Indicator implements EventListenerObject {
         this.open();
         break;
       case 'click':
-        if (e.currentTarget === this.pill) {
-          this.pinned = !this.pinned || !this.isOpen();
-          if (this.pinned) this.open();
-          else this.close();
-        } else {
-          this.onPopoverClick(e);
-        }
+        this.pinned = !this.pinned || !this.isOpen();
+        if (this.pinned) this.open();
+        else this.close();
+        break;
+    }
+  }
+
+  handleEvent(e: Event): void {
+    switch (e.type) {
+      case 'pointerenter':
+        clearTimeout(this.closeTimer);
+        break;
+      case 'pointerleave':
+        this.scheduleClose();
+        break;
+      case 'click':
+        this.onPopoverClick(e);
         break;
       case 'keydown':
         if ((e as KeyboardEvent).key === 'Escape') {
           this.pinned = false;
           this.close();
-          this.pill.focus();
+          this.ui.pill.focus();
         }
         break;
       case 'scroll':
@@ -156,51 +129,14 @@ export class Indicator implements EventListenerObject {
         this.reposition();
         break;
       case 'pointerdown':
-        if (!e.composedPath().includes(this.host)) this.close();
+        if (!e.composedPath().includes(this.ui.host)) this.close();
         break;
     }
-  }
-
-  /** Places the pill next to `anchor`, or floating bottom-right if there is none. */
-  mount(anchor: Element | null): void {
-    if (anchor) {
-      this.host.classList.remove('floating');
-      if (this.host.parentElement !== anchor || anchor.lastElementChild !== this.host) anchor.append(this.host);
-    } else {
-      this.host.classList.add('floating');
-      if (this.host.parentElement !== document.body) document.body?.append(this.host);
-    }
-  }
-
-  unmount(): void {
-    this.close();
-    this.host.remove();
   }
 
   render(state: ViewState): void {
     this.state = state;
     this.dirty = true;
-    const pruned = state.result?.pruned.length ?? 0;
-    const active = state.active && state.status === 'ready' && pruned > 0;
-    let text: string;
-    if (state.status === 'loading') text = 'PRune';
-    else if (state.status === 'error') text = 'PRune ⚠';
-    else if (!state.active) text = 'Prune off';
-    else text = `${pruned} pruned`;
-    const title = state.status === 'error' ? `PRune: ${state.error}` : '';
-    const ariaLabel =
-      state.status === 'ready'
-        ? `PRune: ${pruned} file${pruned === 1 ? '' : 's'} pruned${state.active ? '' : ' (pruning off)'}`
-        : 'PRune';
-    const shown = `${active}\n${text}\n${title}\n${ariaLabel}`;
-    if (shown !== this.shown) {
-      this.shown = shown;
-      this.pill.classList.toggle('active', active);
-      this.pill.classList.toggle('loading', state.status === 'loading');
-      this.label.textContent = text;
-      this.pill.title = title;
-      this.pill.setAttribute('aria-label', ariaLabel);
-    }
     if (this.isOpen()) this.renderPopover();
   }
 
@@ -208,10 +144,10 @@ export class Indicator implements EventListenerObject {
     return !!this.popover?.matches(':popover-open');
   }
 
-  private scheduleOpen(): void {
+  private scheduleOpen(delay: number): void {
     clearTimeout(this.closeTimer);
     clearTimeout(this.openTimer);
-    this.openTimer = window.setTimeout(() => this.open(), OPEN_DELAY);
+    this.openTimer = window.setTimeout(() => this.open(), Math.max(0, delay));
   }
 
   private scheduleClose(): void {
@@ -223,25 +159,25 @@ export class Indicator implements EventListenerObject {
 
   private open(): void {
     clearTimeout(this.closeTimer);
-    if (this.isOpen() || !this.host.isConnected) return;
+    if (this.isOpen() || !this.ui.host.isConnected) return;
     if (!this.popover) {
       this.popover = el('div', 'popover');
       this.popover.popover = 'manual';
       this.popover.setAttribute('role', 'dialog');
       this.popover.setAttribute('aria-label', 'PRune');
       for (const type of ['pointerenter', 'pointerleave', 'click']) this.popover.addEventListener(type, this);
-      this.root.append(styleElement(LIST_CSS + POPOVER_CSS), this.popover);
+      this.ui.root.append(styleElement(LIST_CSS + POPOVER_CSS), this.popover);
     }
     if (this.dirty) this.renderPopover();
     this.popover.showPopover();
-    this.pill.setAttribute('aria-expanded', 'true');
+    this.ui.pill.setAttribute('aria-expanded', 'true');
     this.reposition();
     window.addEventListener('scroll', this, { passive: true });
     window.addEventListener('resize', this, { passive: true });
     document.addEventListener('pointerdown', this, true);
   }
 
-  private close(): void {
+  close(): void {
     clearTimeout(this.openTimer);
     clearTimeout(this.closeTimer);
     this.pinned = false;
@@ -250,7 +186,7 @@ export class Indicator implements EventListenerObject {
     window.removeEventListener('scroll', this);
     window.removeEventListener('resize', this);
     document.removeEventListener('pointerdown', this, true);
-    this.pill.setAttribute('aria-expanded', 'false');
+    this.ui.pill.setAttribute('aria-expanded', 'false');
     if (this.isOpen()) this.popover.hidePopover();
   }
 
@@ -273,7 +209,7 @@ export class Indicator implements EventListenerObject {
   private reposition(): void {
     const popover = this.popover;
     if (!popover) return;
-    const rect = this.pill.getBoundingClientRect();
+    const rect = this.ui.pill.getBoundingClientRect();
     const width = popover.offsetWidth;
     const height = popover.offsetHeight;
     const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);

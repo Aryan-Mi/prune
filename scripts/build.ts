@@ -29,6 +29,17 @@ const root = join(import.meta.dir, '..');
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
 
+/**
+ * Parts of the content script imported only when needed (src/content/chunks.ts),
+ * each an ES module of its own. Each is bundled with everything it uses, so it
+ * imports nothing (a few small helpers are in content.js too).
+ */
+const CONTENT_CHUNKS = {
+  popover: 'src/content/ui/popover.ts',
+  section: 'src/content/ui/section-box.ts',
+  collapse: 'src/content/dom/collapse.ts',
+};
+
 function manifest(target: Target) {
   const icons = Object.fromEntries(ICON_SIZES.map((s) => [s, `icons/icon-${s}.png`]));
   return {
@@ -57,12 +68,13 @@ function manifest(target: Target) {
         run_at: 'document_start',
       },
     ],
-    // For the loader's import(). Chromium serves it from a per-session random
-    // URL only, so pages can't probe for the extension; Firefox's
-    // moz-extension:// URLs are random per install anyway.
+    // For the loader's import() of content.js, and content.js's of its chunks.
+    // Chromium serves them from a per-session random URL only, so pages can't
+    // probe for the extension; Firefox's moz-extension:// URLs are random per
+    // install anyway.
     web_accessible_resources: [
       {
-        resources: ['content.js'],
+        resources: ['content.js', ...Object.keys(CONTENT_CHUNKS).map((name) => `${name}.js`)],
         matches: ['https://github.com/*'],
         ...(target === 'chrome' ? { use_dynamic_url: true } : {}),
       },
@@ -128,15 +140,24 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     charset: 'ascii',
     logLevel: 'warning',
   };
+  const contentScript: esbuild.BuildOptions = {
+    ...common,
+    minify: !readable,
+    plugins: readable ? [] : [minifyCssTemplates],
+  };
   return [
     // Loaded into github.com tabs, so they are minified (~40% smaller source
     // to keep in memory and parse). Rebuild unminified with --readable to
     // debug them.
     {
-      ...common,
+      ...contentScript,
       entryPoints: { content: join(root, 'src/content/index.ts') },
-      minify: !readable,
-      plugins: readable ? [] : [minifyCssTemplates],
+      define: target === 'chrome' ? { browser: 'chrome' } : {},
+    },
+    {
+      ...contentScript,
+      entryPoints: Object.fromEntries(Object.entries(CONTENT_CHUNKS).map(([name, path]) => [name, join(root, path)])),
+      format: 'esm',
     },
     {
       ...common,

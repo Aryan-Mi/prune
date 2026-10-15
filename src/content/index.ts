@@ -3,7 +3,8 @@ import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
 import { isRepoDisabled, loadSettings, rulesKey, type Settings } from '../shared/settings.ts';
-import { Collapser } from './dom/collapse.ts';
+import { withCollapse } from './chunks.ts';
+import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
@@ -72,7 +73,8 @@ class Controller implements UiActions {
   private readonly styles = new PruneStyles();
   private readonly counts = new CountPatcher();
   private readonly regions = new BulkRegions();
-  private readonly collapser = new Collapser();
+  /** Collapse mode's, imported when that setting is first on. */
+  private collapser: Collapser | null = null;
   // Created on the first PR page, dropped when leaving PR pages.
   private indicator: Indicator | null = null;
   private section: PrunedSection | null = null;
@@ -204,7 +206,7 @@ class Controller implements UiActions {
       } else if (!complete && fromMutation) {
         this.scheduleRetry(interval - since);
       }
-      if (this.settings.diffMode === 'collapse') this.collapser.run();
+      if (this.settings.diffMode === 'collapse') this.collapser?.run();
     }
     this.mountUi(fromMutation);
   }
@@ -390,21 +392,34 @@ class Controller implements UiActions {
       });
       this.applyCounts();
       if (this.settings.diffMode === 'collapse') {
-        this.collapser.sync(this.result.pruned.map((f) => f.digest));
-        this.collapser.run();
+        this.collapse(this.result);
       } else {
-        this.collapser.restore();
+        this.collapser?.restore();
       }
     } else {
       this.styles.clear();
       this.counts.restore();
-      this.collapser.restore();
+      this.collapser?.restore();
     }
     this.lastLocate = 0;
     const state = this.viewState();
     (this.indicator ??= new Indicator(this)).render(state);
     if (this.wantsSection()) (this.section ??= new PrunedSection(this)).render(state);
     this.mountUi();
+  }
+
+  /** Collapses the pruned files' diffs; the first time, once collapse mode's chunk is there. */
+  private collapse(result: PruneResult): void {
+    if (!this.collapser) {
+      withCollapse(({ Collapser }) => {
+        if (this.collapser) return;
+        this.collapser = new Collapser();
+        this.render();
+      });
+      return;
+    }
+    this.collapser.sync(result.pruned.map((f) => f.digest));
+    this.collapser.run();
   }
 
   /** Patches the header counters; `full` searches the whole page instead of where they were last found. */
@@ -470,7 +485,7 @@ class Controller implements UiActions {
   private teardown(): void {
     this.styles.clear();
     this.counts.restore();
-    this.collapser.restore();
+    this.collapser?.restore();
     this.indicator?.unmount();
     this.section?.unmount();
   }
