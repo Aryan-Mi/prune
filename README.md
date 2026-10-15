@@ -81,10 +81,10 @@ Performance was a design constraint from the start:
 - **No diff downloading or parsing.** PRune reads `/{owner}/{repo}/pull/{n}/page_data/file_tree`, the same-origin JSON endpoint GitHub's own UI uses. It returns every file's path, line stats and `sha256(path)` digest in one request (~250 bytes per file) and works on private repos with your session. No API token is needed.
 - **Hiding is one stylesheet.** GitHub gives every file diff the DOM id `diff-<sha256(path)>`, in both the classic and the new React "Files changed" UI. PRune injects a single `<style>` with rules for those ids, and the browser applies it to diffs as they stream in, lazy-load or re-render. There's no per-file JavaScript and no node is ever moved, so React's tree is never disturbed.
 - **Counts are patched in place.** The header's text nodes get their `nodeValue` rewritten (never replaced), found by matching the exact totals GitHub reports. If React re-renders, PRune notices and re-applies.
-- **One cheap observer.** A single `MutationObserver` only sets a flag. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows).
-- **Fast matching.** Slash-free patterns are tested per path component (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~3 ms.
+- **One cheap observer.** A single `MutationObserver` only schedules a check, and pauses until it has run. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows). Looking for the header counters skips the diff list and file tree, which on a big PR are nearly the whole page.
+- **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~3 ms.
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 16 ms of main-thread time in total on the conversation tab, with the largest single task at 8 ms.
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 15 ms of main-thread time in total on the conversation tab and 25 ms on the Files changed tab, with the largest single task at 5–8 ms (`node bench/live.ts`).
 
 ## Development
 
