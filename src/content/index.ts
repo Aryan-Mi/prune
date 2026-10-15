@@ -1,15 +1,14 @@
 import { ext } from '../shared/browser.ts';
-import { applyTotals, fetchPrTotals, isCapped } from '../shared/endpoints.ts';
 import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
 import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
-import { CHROMIUM } from '../shared/target.ts';
+import { applyTotals, isCapped } from '../shared/totals.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
-import { fetchFileTree, fetchRepoConfig, parsePrUrl, type PrRef } from './github.ts';
+import { fetchFileTree, fetchPrTotals, fetchRepoConfig, mayBeCapped, parsePrUrl, type PrRef } from './github.ts';
 import { Indicator } from './ui/indicator.ts';
 import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
@@ -37,11 +36,11 @@ interface PrData {
 
 /** GitHub's responses for a PR, on their way to the background script. */
 interface PrResponses {
-  /** The file_tree response, body unread; null when the background script fetches it (`Lookup.fetches`). */
-  fileTree: Response | null;
+  /** The file_tree response, body unread. */
+  fileTree: Response;
   /** ETag of the file list the background script has a result for. */
   storedEtag: string | null;
-  /** GitHub's totals, requested right away if the stored list was capped. */
+  /** GitHub's totals, requested along with the list if it may well be capped (see isCapped()). */
   totals: Promise<Partial<PrTotals> | null>;
   repo: RepoConfig;
   repoFetched: boolean;
@@ -280,14 +279,12 @@ class Controller implements UiActions {
   }
 
   /**
-   * Has the background script parse and prune the PR's file list. In
-   * Chromium it fetches the list itself (see background/fetch.ts), so the
-   * page does next to nothing. Otherwise the list is fetched here
-   * (same-origin, so private repos and Firefox containers work): on a
-   * 3000-file PR a 700 KB JSON response that the page never parses or keeps,
-   * and gets back only the pruned files. If the background script already
-   * has a result for this exact list (from an earlier visit; GitHub's ETag
-   * says so), the response isn't even read, let alone passed along.
+   * Fetches the PR's file list here (same-origin, so private repos work) and
+   * has the background script parse and prune it. On a 3000-file PR that is a
+   * 700 KB JSON response; the page never parses it or keeps any of it, and
+   * gets back only the pruned files. If the background script already has a
+   * result for this exact list (from an earlier visit; GitHub's ETag says so),
+   * the response isn't even read, let alone passed along.
    */
   private prData(pr: PrRef): Promise<PrData> {
     let entry = this.prCache.get(pr.key);
@@ -295,9 +292,14 @@ class Controller implements UiActions {
       const prefetched = this.prefetched?.key === pr.key ? this.prefetched.promise : null;
       this.prefetched = null;
       const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
-        // With GitHub's totals already, if they're needed.
-        let result = responses.fileTree ? null : await prune(pr, responses, null, null).catch(() => null);
-        result ??= await pruneHere(pr, responses);
+        const res = responses.fileTree;
+        const etag = res.headers.get('ETag');
+        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
+        if (result) discard(res);
+        // Not stored (any more): send the list over.
+        else result = await prune(pr, responses, await res.text(), etag);
+        if (!result) throw new Error('Could not prune this pull request');
+        if (isCapped(result)) result = applyTotals(result, (await responses.totals) ?? (await fetchPrTotals(pr)));
         return { key: pr.key, result, repoConfigPath: responses.repo.path };
       });
       entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
@@ -306,9 +308,9 @@ class Controller implements UiActions {
     return entry.promise;
   }
 
-  /** Asks the background script for settings and what it has for `pr`; also wakes it up. */
+  /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
   private lookup(pr: PrRef): Promise<Lookup> {
-    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey, basePath: pr.basePath }).catch(
+    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
       async (): Promise<Lookup> => ({
         // Not reachable right now: fetch everything, and read settings here.
         settings: this.configured ? this.settings : pageSettings(await loadSettings()),
@@ -316,16 +318,16 @@ class Controller implements UiActions {
         etag: null,
         capped: false,
         repo: null,
-        fetches: false,
       }),
     );
   }
 
-  /** GitHub's responses for `pr`, minus what the background script already has or fetches. Doesn't need settings. */
+  /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
   private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
-    // Only Chromium's background script may fetch it, so elsewhere don't wait to hear.
-    const fileTree = CHROMIUM ? lookup.then(({ fetches }) => (fetches ? null : fetchFileTree(pr))) : fetchFileTree(pr);
-    const totals = lookup.then(({ capped }) => (capped ? fetchPrTotals(pr.basePath) : null));
+    const fileTree = fetchFileTree(pr);
+    const totals = Promise.all([fileTree, lookup])
+      .then(([res, { capped }]) => (capped || mayBeCapped(res) ? fetchPrTotals(pr) : null))
+      .catch(() => null);
     return Promise.all([
       fileTree,
       lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
@@ -595,7 +597,6 @@ function prune(
     type: 'prune',
     key: pr.key,
     repoKey: pr.repoKey,
-    basePath: pr.basePath,
     fileTree,
     etag,
     repo,
@@ -615,19 +616,6 @@ function shareStrings(result: PruneResult): PruneResult {
     file.rule = share(file.rule);
     file.source = share(file.source);
   }
-  return result;
-}
-
-/** prune() with the file list fetched here, for when the background script doesn't (or couldn't). */
-async function pruneHere(pr: PrRef, responses: PrResponses): Promise<PruneResult> {
-  const res = responses.fileTree ?? (await fetchFileTree(pr));
-  const etag = res.headers.get('ETag');
-  let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
-  if (result) discard(res);
-  // Not stored (any more): send the list over.
-  else result = await prune(pr, responses, await res.text(), etag);
-  if (!result) throw new Error('Could not prune this pull request');
-  if (isCapped(result)) result = applyTotals(result, (await responses.totals) ?? (await fetchPrTotals(pr.basePath)));
   return result;
 }
 

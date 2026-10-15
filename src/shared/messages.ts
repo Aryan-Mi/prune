@@ -18,22 +18,20 @@ export type Message =
   | { type: 'set-inactive'; keys: string[] }
   /**
    * Content → background, as soon as a PR page opens: what the background
-   * already has for this PR (see background/cache.ts). Also wakes it up, and
-   * in Chromium has it start fetching the file list (see background/fetch.ts).
+   * already has for this PR (see background/cache.ts). Also wakes it up.
    */
-  | { type: 'lookup'; key: string; repoKey: string; basePath: string }
+  | { type: 'lookup'; key: string; repoKey: string }
   /**
    * Content → background: prune a PR's file_tree response (see shared/prune.ts).
    * `fileTree` is null when the response has the ETag of the list the
-   * background script has a result for (`Lookup.etag`), or when it fetches
-   * the list itself (`Lookup.fetches`; then `etag` is null too). If that
-   * fails, it replies null and the content script sends the list.
+   * background script has a result for (`Lookup.etag`); if that result is
+   * gone by now or for other rules, it replies null and the content script
+   * sends the list.
    */
   | {
       type: 'prune';
       key: string;
       repoKey: string;
-      basePath: string;
       fileTree: string | null;
       etag: string | null;
       repo: RepoConfig;
@@ -52,8 +50,6 @@ export interface Lookup {
   capped: boolean;
   /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */
   repo: RepoConfig | null;
-  /** The background script fetches the file list (and totals) itself, so the page doesn't. */
-  fetches: boolean;
 }
 
 /** Reply to `get-status`, sent from the content script to the popup. */

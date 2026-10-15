@@ -1,5 +1,6 @@
 import { REPO_CONFIG_PATHS } from '../shared/defaults.ts';
-import { JSON_HEADERS } from '../shared/endpoints.ts';
+import type { PrTotals } from '../shared/filetree.ts';
+import { LIST_CAP } from '../shared/totals.ts';
 import { PR_PATH } from './route.ts';
 import type { RepoConfig } from '../shared/messages.ts';
 
@@ -36,6 +37,11 @@ export function parsePrUrl(pathname: string): PrRef | null {
   };
 }
 
+const JSON_HEADERS = {
+  Accept: 'application/json',
+  'X-Requested-With': 'XMLHttpRequest',
+};
+
 /**
  * Same-origin request to the JSON endpoint GitHub's PR UI uses for its file
  * tree. Runs with the user's session, so private repositories work, and it is
@@ -54,6 +60,18 @@ export async function fetchFileTree(pr: PrRef, signal?: AbortSignal): Promise<Re
   });
   if (!res.ok) throw new Error(`file_tree request failed: HTTP ${res.status}`);
   return res;
+}
+
+/**
+ * Whether a file_tree response may hold a capped list, judging by its size
+ * alone: each listed file takes at least ~150 bytes, and its digest (64 hex
+ * digits) alone at least 32 compressed. So GitHub's totals can be requested
+ * before the list has been pruned, and needn't be for most PRs.
+ */
+export function mayBeCapped(res: Response): boolean {
+  const length = Number(res.headers.get('Content-Length'));
+  if (!length) return true;
+  return length >= LIST_CAP * (res.headers.get('Content-Encoding') ? 32 : 150);
 }
 
 /**
@@ -78,4 +96,36 @@ export async function fetchRepoConfig(pr: PrRef, ref: string, signal?: AbortSign
     if (r.status === 'fulfilled' && r.value) return r.value;
   }
   return { path: null, text: null };
+}
+
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
+  try {
+    const res = await fetch(url, { headers: JSON_HEADERS, credentials: 'same-origin', signal });
+    if (!res.ok) return null;
+    return JSON.parse(await res.text()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The exact totals GitHub shows in the PR header. Only needed when the file
+ * list is capped (see shared/totals.ts): for huge PRs the header totals
+ * cannot be derived from the list.
+ */
+export async function fetchPrTotals(pr: PrRef, signal?: AbortSignal): Promise<Partial<PrTotals>> {
+  const [diffstat, counts] = await Promise.all([
+    fetchJson<{ diffstat?: { linesAdded?: number; linesDeleted?: number } }>(
+      `${pr.basePath}/page_data/diffstat`,
+      signal,
+    ),
+    fetchJson<{ filesChangedCount?: number }>(`${pr.basePath}/page_data/tab_counts`, signal),
+  ]);
+  const totals: Partial<PrTotals> = {};
+  if (diffstat?.diffstat) {
+    totals.additions = diffstat.diffstat.linesAdded ?? 0;
+    totals.deletions = diffstat.diffstat.linesDeleted ?? 0;
+  }
+  if (typeof counts?.filesChangedCount === 'number') totals.files = counts.filesChangedCount;
+  return totals;
 }

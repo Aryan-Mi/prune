@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { PrFileList, type PrFile } from '../src/shared/filetree.ts';
 import { buildCss } from '../src/content/dom/styles.ts';
-import { applyTotals, isCapped } from '../src/shared/endpoints.ts';
+import { applyTotals, isCapped } from '../src/shared/totals.ts';
 import { computePrune, prunePr } from '../src/shared/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from '../src/shared/settings.ts';

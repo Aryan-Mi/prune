@@ -1,7 +1,7 @@
 import { ext } from '../shared/browser.ts';
-import { isCapped } from '../shared/endpoints.ts';
 import type { RepoConfig } from '../shared/messages.ts';
 import type { PruneResult } from '../shared/prune.ts';
+import { isCapped } from '../shared/totals.ts';
 
 /**
  * Results the background script has computed before, kept in storage.session

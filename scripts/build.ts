@@ -135,8 +135,6 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     // keep the whole script source as UTF-16, doubling its memory.
     charset: 'ascii',
     logLevel: 'warning',
-    // See src/shared/target.ts.
-    define: { __CHROMIUM__: String(target === 'chrome') },
   };
   return [
     // Loaded into github.com tabs, so they are minified (~40% smaller source
@@ -152,7 +150,7 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
       ...common,
       entryPoints: { loader: join(root, 'src/content/loader.ts') },
       minify: !readable,
-      define: { ...common.define, ...(target === 'chrome' ? { browser: 'chrome' } : {}) },
+      define: target === 'chrome' ? { browser: 'chrome' } : {},
     },
     // Readable output: easier to debug and to get through store review.
     {

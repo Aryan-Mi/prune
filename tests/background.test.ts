@@ -37,10 +37,7 @@ let onChanged: (changes: Record<string, { oldValue?: unknown; newValue?: unknown
     },
   },
 };
-// As in the Chromium build (see shared/target.ts).
-(globalThis as { __CHROMIUM__?: boolean }).__CHROMIUM__ = true;
 const { cachePartition, loadResult, rulesFingerprint, saveResult, stored } = await import('../src/background/cache.ts');
-const { fetchesFor, fetchFileList } = await import('../src/background/fetch.ts');
 const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
 const { computePrune } = await import('../src/shared/prune.ts');
 const { compileRules } = await import('../src/shared/rules.ts');
@@ -97,49 +94,6 @@ test('cache keys are per container, and private windows get none', () => {
   expect(cachePartition({})).toBeNull();
 });
 
-test('the background script only fetches for regular Chromium tabs', () => {
-  const tab = { incognito: false } as browser.tabs.Tab;
-  expect(fetchesFor({ tab })).toBe(true);
-  expect(fetchesFor({ tab: { ...tab, incognito: true } })).toBe(false);
-  // Firefox, in any container.
-  expect(fetchesFor({ tab: { ...tab, cookieStoreId: 'firefox-default' } })).toBe(false);
-  expect(fetchesFor({ tab: { ...tab, cookieStoreId: 'firefox-container-1' } })).toBe(false);
-  expect(fetchesFor({})).toBe(false);
-});
-
-test('background fetches: only PR paths, 304 for the ETag, anything else fails', async () => {
-  const requests: [string, RequestInit][] = [];
-  const realFetch = globalThis.fetch;
-  let reply = () => new Response(JSON.stringify({ diffs: [] }), { status: 200, headers: { ETag: 'W/"new"' } });
-  globalThis.fetch = (async (url: string, init: RequestInit) => {
-    requests.push([url, init]);
-    return reply();
-  }) as typeof fetch;
-  try {
-    expect(await fetchFileList('/a/b/pull/1/../../../settings', null)).toBeNull();
-    expect(await fetchFileList('/a/b/pull/1?x', null)).toBeNull();
-    expect(requests).toHaveLength(0);
-
-    const fetched = await fetchFileList('/a/b/pull/1', null);
-    expect(fetched?.etag).toBe('W/"new"');
-    expect(fetched?.files?.length).toBe(0);
-    expect(requests[0]![0]).toBe('https://github.com/a/b/pull/1/page_data/file_tree');
-    expect(requests[0]![1]).toMatchObject({ credentials: 'include', redirect: 'error', cache: 'no-store' });
-
-    reply = () => new Response(null, { status: 304 });
-    expect(await fetchFileList('/a/b/pull/1', 'W/"old"')).toEqual({ etag: 'W/"old"', files: null });
-    expect((requests[1]![1].headers as Record<string, string>)['If-None-Match']).toBe('W/"old"');
-    // A 304 without having asked for one isn't an answer.
-    expect(await fetchFileList('/a/b/pull/1', null)).toBeNull();
-
-    reply = () => new Response('Not Found', { status: 404 });
-    expect(await fetchFileList('/a/b/pull/1', null)).toBeNull();
-    reply = () => new Response('<!DOCTYPE html>', { status: 200 });
-    expect(await fetchFileList('/a/b/pull/1', null)).toBeNull();
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
 test('tabs keep their switched-off PRs and get settings changes', async () => {
   expect(await openTab(1)).toEqual([]);
   await setInactive(1, ['a/b#1']);

@@ -1,4 +1,4 @@
-import { keptTotals } from './endpoints.ts';
+import { keptTotals } from './totals.ts';
 import { parseFileTree, type PrFile, type PrFileList, type PrTotals } from './filetree.ts';
 import { compileRules, type CompiledRules, type RuleInputs } from './rules.ts';
 import type { Settings } from './settings.ts';
