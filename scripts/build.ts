@@ -70,6 +70,33 @@ function manifest(target: Target) {
   };
 }
 
+/**
+ * Strips the whitespace from the content script's `/* css *\/` template
+ * literals (the shadow DOM styles): less script to parse on every github.com
+ * page, less CSS to parse when the UI is built. Only removes what is never
+ * significant in these styles (indentation, newlines, spaces around `{};,`
+ * and after `:`), so no CSS parser is needed. Templates with `${}` or
+ * escapes are left alone.
+ */
+const minifyCssTemplates: esbuild.Plugin = {
+  name: 'minify-css-templates',
+  setup(build) {
+    build.onLoad({ filter: /src[\\/]content[\\/].*\.ts$/ }, async ({ path }) => {
+      const source = await Bun.file(path).text();
+      const contents = source.replace(/\/\* css \*\/ `([^`$\\]*)`/g, (_, css: string) => {
+        const min = css
+          .replace(/\s+/g, ' ')
+          .replace(/ ?([{};,]) ?/g, '$1')
+          .replace(/;}/g, '}')
+          .replace(/: /g, ':')
+          .trim();
+        return `\`${min}\``;
+      });
+      return { contents, loader: 'ts' };
+    });
+  },
+};
+
 function esbuildOptions(target: Target): esbuild.BuildOptions[] {
   const common: esbuild.BuildOptions = {
     outdir: join(root, 'dist', target),
@@ -86,7 +113,12 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     // Loaded into every github.com tab, so it is minified (~40% smaller
     // source to keep in memory and parse). Rebuild unminified with
     // --readable to debug it.
-    { ...common, entryPoints: { content: join(root, 'src/content/index.ts') }, minify: !readable },
+    {
+      ...common,
+      entryPoints: { content: join(root, 'src/content/index.ts') },
+      minify: !readable,
+      plugins: readable ? [] : [minifyCssTemplates],
+    },
     // Readable output: easier to debug and to get through store review.
     {
       ...common,
