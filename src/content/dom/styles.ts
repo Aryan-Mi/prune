@@ -52,8 +52,9 @@ export class PruneStyles {
     }
     const { diffMode, treeMode } = options;
     const revealed = [...options.revealed].join();
-    const classic = isClassicUi();
     const built = this.built;
+    // A sheet built for both UIs still does once the page turns out to be classic.
+    const classic = isClassicUi() && (built?.result !== result || built.classic);
     if (
       built?.result !== result ||
       built.diffMode !== diffMode ||
