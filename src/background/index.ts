@@ -1,8 +1,18 @@
 import { ext } from '../shared/browser.ts';
-import type { Message } from '../shared/messages.ts';
+import { parseFileTree, type PrFileList } from '../shared/filetree.ts';
+import type { Lookup, Message } from '../shared/messages.ts';
 import { parseRules } from '../shared/matcher.ts';
-import { prunePr, type PruneResult } from '../shared/prune.ts';
+import { computePrune, type PruneResult } from '../shared/prune.ts';
+import { compileRules } from '../shared/rules.ts';
 import { loadRemoteCache, loadSettings, REMOTE_KEY, REMOTE_TTL_MS, type RemoteCache } from '../shared/settings.ts';
+import {
+  cachePartition,
+  loadFileList,
+  saveFileList,
+  saveRepoConfig,
+  storedEtag,
+  storedRepoConfig,
+} from './cache.ts';
 
 /** Rules files larger than this are rejected; real ones are a few KB. */
 const MAX_REMOTE_BYTES = 512 * 1024;
@@ -58,33 +68,56 @@ function refreshOnce(force = false): Promise<RemoteCache | null> {
   return inflight;
 }
 
+/** What's stored for a PR page that just opened, so the content script can skip fetching it. */
+async function lookup(msg: Extract<Message, { type: 'lookup' }>, partition: string | null): Promise<Lookup> {
+  if (partition === null) return { etag: null, repo: null };
+  const [etag, repo, settings] = await Promise.all([
+    storedEtag(partition + msg.key),
+    storedRepoConfig(partition + msg.repoKey),
+    loadSettings(),
+  ]);
+  return { etag, repo: settings.useRepoConfig ? repo : { path: null, text: null } };
+}
+
 /**
  * Parses and prunes a PR's file list for a content script. This is the bulk
  * of PRune's work on a big PR (a 700 KB response with 3000 files), and doing
  * it here keeps it off the GitHub page's main thread and out of its memory:
- * the page only gets the pruned files back.
+ * the page only gets the pruned files back. Replies null when asked to use a
+ * stored list that is gone by now; the content script then sends it.
  */
-async function prune(msg: Extract<Message, { type: 'prune' }>): Promise<PruneResult> {
+async function prune(msg: Extract<Message, { type: 'prune' }>, partition: string | null): Promise<PruneResult | null> {
+  const key = partition === null ? null : partition + msg.key;
+  let files: PrFileList | null;
+  if (msg.fileTree === null) {
+    files = key !== null && msg.etag ? await loadFileList(key, msg.etag) : null;
+    if (!files) return null;
+  } else {
+    files = parseFileTree(msg.fileTree);
+    if (key !== null && msg.etag) saveFileList(key, msg.etag, files).catch(() => {});
+  }
+  if (partition !== null && msg.repoFetched) saveRepoConfig(partition + msg.repoKey, msg.repo).catch(() => {});
   const [settings, remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
   if (settings.remoteUrl && (remote?.url !== settings.remoteUrl || Date.now() - remote.fetchedAt > REMOTE_TTL_MS)) {
     // Content scripts reload when the new copy lands in storage.
     refreshOnce().catch(() => {});
   }
-  return prunePr(msg.fileTree, msg.totals, settings, {
-    repoText: msg.repoText,
-    repoPath: msg.repoPath,
+  const rules = compileRules(settings, {
+    repoText: msg.repo.text,
+    repoPath: msg.repo.path,
     remoteText: remote?.url === settings.remoteUrl ? remote.text : null,
   });
+  return computePrune(files, msg.totals, rules, settings);
 }
 
 // Respond via sendResponse + `return true`: works in Firefox and in every
 // Chromium version (returning a Promise is not supported everywhere).
-ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse: (value: unknown) => void) => {
+ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: unknown) => void) => {
   let task: Promise<unknown> | undefined;
   if (msg.type === 'open-options') task = ext.runtime.openOptionsPage();
   else if (msg.type === 'refresh-remote') task = refreshOnce(msg.force);
-  else if (msg.type === 'prune') task = prune(msg);
-  else if (msg.type === 'warm') task = Promise.resolve(null);
+  else if (msg.type === 'lookup') task = lookup(msg, cachePartition(sender));
+  else if (msg.type === 'prune') task = prune(msg, cachePartition(sender));
   if (!task) return undefined;
   task.then(
     (value) => sendResponse(value ?? null),

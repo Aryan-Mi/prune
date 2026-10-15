@@ -1,14 +1,46 @@
 import type { PrTotals } from './filetree.ts';
 
+/** A repository's `.pruneignore`, as found on its default branch. */
+export interface RepoConfig {
+  path: string | null;
+  text: string | null;
+}
+
 export type Message =
   | { type: 'open-options' }
   | { type: 'refresh-remote'; force?: boolean }
   | { type: 'get-status' }
   | { type: 'set-active'; active: boolean }
-  /** Content → background: prune a PR's file_tree response (see shared/prune.ts). */
-  | { type: 'prune'; fileTree: string; totals: Partial<PrTotals>; repoText: string | null; repoPath: string | null }
-  /** Content → background: wakes the background script up ahead of a `prune`. */
-  | { type: 'warm' };
+  /**
+   * Content → background, as soon as a PR page opens: what the background
+   * already has for this PR (see background/cache.ts). Also wakes it up.
+   */
+  | { type: 'lookup'; key: string; repoKey: string }
+  /**
+   * Content → background: prune a PR's file_tree response (see shared/prune.ts).
+   * `fileTree` is null when the response has the ETag of the list the
+   * background script has stored (`Lookup.etag`); if that's gone by now, it
+   * replies null and the content script sends the list.
+   */
+  | {
+      type: 'prune';
+      key: string;
+      repoKey: string;
+      fileTree: string | null;
+      etag: string | null;
+      totals: Partial<PrTotals>;
+      repo: RepoConfig;
+      /** `repo` was just fetched (not handed out by `lookup`), so it's worth keeping. */
+      repoFetched: boolean;
+    };
+
+/** Reply to `lookup`. */
+export interface Lookup {
+  /** ETag of the stored file list, to revalidate with. */
+  etag: string | null;
+  /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */
+  repo: RepoConfig | null;
+}
 
 /** Reply to `get-status`, sent from the content script to the popup. */
 export interface TabStatus {

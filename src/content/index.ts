@@ -1,5 +1,5 @@
 import { ext } from '../shared/browser.ts';
-import type { Message, TabStatus } from '../shared/messages.ts';
+import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
 import { isRepoDisabled, loadSettings, onConfigChanged, rulesKey, type Settings } from '../shared/settings.ts';
@@ -7,14 +7,13 @@ import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
-import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef, type RepoConfig } from './github.ts';
+import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef } from './github.ts';
 import { Indicator } from './ui/indicator.ts';
 import { PrunedSection } from './ui/section.ts';
 import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
 
 /** A PR's result is reused across tab switches for this long before refetching. */
 const PR_DATA_TTL_MS = 60_000;
-const REPO_CONFIG_TTL_MS = 10 * 60_000;
 /** Minimum gap between DOM checks while the page is mutating. */
 const CHECK_INTERVAL_MS = 100;
 /** Minimum gap between full rescans for new header counters (e.g. sticky headers). */
@@ -32,8 +31,13 @@ interface PrData {
 
 /** GitHub's responses for a PR, on their way to the background script. */
 interface PrResponses {
-  fileTree: string;
+  /** The file_tree response, body unread. */
+  fileTree: Response;
+  /** ETag of the file list the background script has stored for this PR. */
+  storedEtag: string | null;
   totals: Partial<PrTotals>;
+  repo: RepoConfig;
+  repoFetched: boolean;
 }
 
 interface CacheEntry<T> {
@@ -56,7 +60,6 @@ class Controller implements UiActions {
   private readonly prCache = new Map<string, CacheEntry<PrData>>();
   /** Responses fetched while settings were still loading. */
   private prefetched: { key: string; promise: Promise<PrResponses> } | null = null;
-  private readonly repoCache = new Map<string, CacheEntry<RepoConfig>>();
   private readonly revealed = new Map<string, Set<string>>();
   /** PRs switched off in this tab; read from sessionStorage on first use (it costs ~1 ms). */
   private inactiveKeys: Set<string> | null = null;
@@ -261,39 +264,49 @@ class Controller implements UiActions {
    * Fetches the PR's file list here (same-origin, so private repos work) and
    * has the background script parse and prune it. On a 3000-file PR that is a
    * 700 KB JSON response; the page never parses it or keeps any of it, and
-   * gets back only the pruned files.
+   * gets back only the pruned files. If the background script already has
+   * this exact list (from an earlier visit; GitHub's ETag says so), the
+   * response isn't even read, let alone passed along.
    */
   private prData(pr: PrRef): Promise<PrData> {
     let entry = this.prCache.get(pr.key);
     if (!entry || Date.now() - entry.at > PR_DATA_TTL_MS) {
       const prefetched = this.prefetched?.key === pr.key ? this.prefetched.promise : null;
       this.prefetched = null;
-      const promise = Promise.all([prefetched ?? this.fetchPr(pr), this.repoConfig(pr)]).then(
-        ([{ fileTree, totals }, repo]) =>
-          sendMessage<PruneResult>({ type: 'prune', fileTree, totals, repoText: repo.text, repoPath: repo.path }).then(
-            (result) => ({ key: pr.key, result, repoConfigPath: repo.path }),
-          ),
-      );
+      const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
+        const res = responses.fileTree;
+        const etag = res.headers.get('ETag');
+        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
+        if (result) res.body?.cancel().catch(() => {});
+        // Not stored (any more): send the list over.
+        else result = await prune(pr, responses, await res.text(), etag);
+        if (!result) throw new Error('Could not prune this pull request');
+        return { key: pr.key, result, repoConfigPath: responses.repo.path };
+      });
       entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
       promise.catch(() => this.prCache.delete(pr.key));
     }
     return entry.promise;
   }
 
+  /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
   private fetchPr(pr: PrRef): Promise<PrResponses> {
-    // A Chromium service worker may need waking up; do it while GitHub responds.
-    sendMessage({ type: 'warm' }).catch(() => {});
-    return Promise.all([fetchFileTree(pr), fetchPrTotals(pr)]).then(([fileTree, totals]) => ({ fileTree, totals }));
-  }
-
-  private repoConfig(pr: PrRef): Promise<RepoConfig> {
-    if (!this.settings.useRepoConfig) return Promise.resolve({ path: null, text: null });
-    let entry = this.repoCache.get(pr.repoKey);
-    if (!entry || Date.now() - entry.at > REPO_CONFIG_TTL_MS) {
-      const promise = fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }));
-      entry = cache(this.repoCache, pr.repoKey, promise, REPO_CONFIG_TTL_MS);
-    }
-    return entry.promise;
+    // Also wakes up a Chromium service worker while GitHub responds.
+    const lookup = sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
+      (): Lookup => ({ etag: null, repo: null }),
+    );
+    return Promise.all([
+      fetchFileTree(pr),
+      fetchPrTotals(pr),
+      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+      lookup,
+    ]).then(([fileTree, totals, repo, stored]) => ({
+      fileTree,
+      storedEtag: stored.etag,
+      totals,
+      repo,
+      repoFetched: !stored.repo,
+    }));
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -540,6 +553,24 @@ function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
 function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
+}
+
+function prune(
+  pr: PrRef,
+  { totals, repo, repoFetched }: PrResponses,
+  fileTree: string | null,
+  etag: string | null,
+): Promise<PruneResult | null> {
+  return sendMessage<PruneResult | null>({
+    type: 'prune',
+    key: pr.key,
+    repoKey: pr.repoKey,
+    fileTree,
+    etag,
+    totals,
+    repo,
+    repoFetched,
+  });
 }
 
 /** Messages the background script; it replies `{ error }` when something failed. */

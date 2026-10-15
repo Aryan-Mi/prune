@@ -39,3 +39,17 @@ test('PrFileList stores files column-wise and gives them back', () => {
   expect(list.digest(1)).toBe(files[1]!.digest);
   expect([list.get(0), list.get(1)]).toEqual(files);
 });
+
+test('PrFileList survives a round trip through extension storage', () => {
+  const files = ['a.ts', 'dist/b.js', 'c.md'].map((path, i) => ({
+    path,
+    digest: Bun.CryptoHasher.hash('sha256', path, 'hex'),
+    additions: i * 7,
+    deletions: i + 2,
+    generated: i === 1,
+  }));
+  const stored = JSON.parse(JSON.stringify(PrFileList.of(files).toStored()));
+  const list = PrFileList.fromStored(stored);
+  expect(list.length).toBe(3);
+  expect([0, 1, 2].map((i) => list.get(i))).toEqual(files);
+});
