@@ -120,7 +120,10 @@ describe('built-in defaults', () => {
   );
   test('every built-in pattern compiles', () => {
     for (const g of DEFAULT_GROUPS) {
-      expect(parseRules(g.patterns.join('\n'), g.label).errors).toEqual([]);
+      const parsed = parseRules(g.patterns.join('\n'), g.label);
+      expect(parsed.errors).toEqual([]);
+      // Plain patterns (no `!`, comments or padding), so rules.ts compiles them directly.
+      expect(parsed.rules.map((r) => `${r.negated ? '!' : ''}${r.pattern}`)).toEqual([...g.patterns]);
     }
   });
 });

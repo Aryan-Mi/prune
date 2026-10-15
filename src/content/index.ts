@@ -12,6 +12,7 @@ import {
 } from '../shared/settings.ts';
 import { Collapser } from './dom/collapse.ts';
 import { CountPatcher } from './dom/counts.ts';
+import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
 import {
   fetchPrFiles,
@@ -66,16 +67,19 @@ class Controller implements UiActions {
   private readonly prCache = new Map<string, CacheEntry<Omit<PrData, 'repoConfig'>>>();
   private readonly repoCache = new Map<string, CacheEntry<RepoConfig>>();
   private readonly revealed = new Map<string, Set<string>>();
-  private readonly inactive = new Set<string>(readInactive());
+  /** PRs switched off in this tab; read from sessionStorage on first use (it costs ~1 ms). */
+  private inactiveKeys: Set<string> | null = null;
   private loadToken = 0;
 
   private readonly styles = new PruneStyles();
   private readonly counts = new CountPatcher();
+  private readonly regions = new BulkRegions();
   private readonly collapser = new Collapser();
   private readonly indicator = new Indicator(this);
   private readonly section = new PrunedSection(this);
   private sectionContainer: Element | null = null;
 
+  private readonly observer = new MutationObserver(() => this.onMutation());
   private checkTimer = 0;
   private retryTimer = 0;
   private lastCheck = 0;
@@ -107,12 +111,10 @@ class Controller implements UiActions {
       return undefined;
     });
 
-    // One observer for the whole page; the callback only schedules a check, so
-    // its cost is constant no matter how many nodes GitHub adds.
-    new MutationObserver(() => this.scheduleCheck()).observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
+    // One observer for the whole page; the callback only schedules a check (and
+    // pauses itself until then), so its cost is constant no matter how many
+    // nodes GitHub adds.
+    this.observe();
     window.addEventListener('popstate', () => this.scheduleCheck());
     // Back/forward-cache restores bring back a frozen DOM without mutations.
     window.addEventListener('pageshow', (e) => {
@@ -131,8 +133,21 @@ class Controller implements UiActions {
 
   // ---- Scheduling -------------------------------------------------------
 
+  private observe(): void {
+    this.observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  private onMutation(): void {
+    // A navigation: handle it right away, before the new page is painted.
+    if (location.href !== this.href) this.check();
+    else this.scheduleCheck();
+  }
+
   private scheduleCheck(): void {
     if (this.checkTimer) return;
+    // Until the check runs, further mutations would change nothing, so don't
+    // have the browser record them (a big PR page makes thousands).
+    this.observer.disconnect();
     const wait = Math.max(0, CHECK_INTERVAL_MS - (performance.now() - this.lastCheck));
     this.checkTimer = window.setTimeout(() => {
       this.checkTimer = 0;
@@ -147,6 +162,7 @@ class Controller implements UiActions {
    */
   private check(fromMutation = true): void {
     this.lastCheck = performance.now();
+    this.observe();
     if (location.href !== this.href) {
       this.href = location.href;
       this.onLocationChange();
@@ -187,12 +203,14 @@ class Controller implements UiActions {
     if (prev?.key !== pr.key) {
       this.teardown();
       this.sectionContainer = null;
+      this.regions.reset();
       this.load(pr);
     } else {
       // Same PR, different tab: refresh if the data is getting old.
       const cached = this.prCache.get(pr.key);
       if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS) this.load(pr);
       this.sectionContainer = null;
+      this.regions.reset();
       this.revealFromHash();
       this.render();
     }
@@ -219,12 +237,17 @@ class Controller implements UiActions {
     }
 
     Promise.all([entry.promise, this.repoConfig(pr)])
-      .then(([prData, repoConfig]) => {
+      .then(async ([prData, repoConfig]) => {
+        // Matching and DOM work each get their own task, apart from parsing
+        // the file list, so that no single task gets long on a huge PR.
+        await nextTask();
         if (token !== this.loadToken) return;
         this.data = { ...prData, repoConfig };
         this.status = 'ready';
         this.error = undefined;
         this.recompute();
+        await nextTask();
+        if (token !== this.loadToken) return;
         this.revealFromHash();
         this.render();
       })
@@ -272,7 +295,11 @@ class Controller implements UiActions {
   }
 
   private isActive(): boolean {
-    return !!this.pr && !this.inactive.has(this.pr.key);
+    return !!this.pr && !this.inactive().has(this.pr.key);
+  }
+
+  private inactive(): Set<string> {
+    return (this.inactiveKeys ??= new Set(readInactive()));
   }
 
   private isPruning(): boolean {
@@ -308,7 +335,8 @@ class Controller implements UiActions {
     }
     const pruning = this.isPruning();
     if (pruning && this.result) {
-      this.styles.update(this.result, {
+      // Only diff views have file diffs and a file tree to hide.
+      this.styles.update(this.pr.isDiffView ? this.result : null, {
         diffMode: this.settings.diffMode,
         treeMode: this.settings.treeMode,
         revealed: this.revealedSet(),
@@ -334,7 +362,7 @@ class Controller implements UiActions {
 
   private applyCounts(): void {
     if (!this.pr || !this.result) return;
-    this.counts.apply(this.pr.basePath, this.result.original, this.result.kept);
+    this.counts.apply(this.pr.basePath, this.result.original, this.result.kept, this.bulk());
   }
 
   private wantsSection(): boolean {
@@ -347,25 +375,37 @@ class Controller implements UiActions {
     let anchor = this.counts.diffstatAnchor;
     // While pruning, applyCounts() discovers the diffstat; locate() is only for
     // finding where to put the pill when there is nothing to patch.
-    if (!anchor && this.result && !this.isPruning()) {
-      const since = performance.now() - this.lastLocate;
-      if (since >= INCOMPLETE_RESCAN_MS) {
-        this.lastLocate = performance.now();
-        anchor = this.counts.locate(this.result.original);
-      } else if (fromMutation) {
-        this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
-      }
+    if (!anchor && this.result && !this.isPruning() && this.canLocate(fromMutation)) {
+      anchor = this.counts.locate(this.result.original, this.bulk());
     }
     anchor ??= findDiffstatFallback();
     // Avoid a floating pill flashing while the header is still rendering.
     if (anchor || this.status !== 'loading') this.indicator.mount(anchor);
     else this.indicator.unmount();
     if (this.wantsSection()) {
-      if (!this.sectionContainer?.isConnected) this.sectionContainer = this.findDiffListContainer();
+      if (!this.sectionContainer?.isConnected && this.canLocate(fromMutation)) {
+        this.sectionContainer = this.findDiffListContainer();
+      }
       if (this.sectionContainer) this.section.mount(this.sectionContainer);
     } else {
       this.section.unmount();
     }
+  }
+
+  /** Rate-limits searches for page parts that may not have rendered yet (queues a retry instead). */
+  private canLocate(fromMutation: boolean): boolean {
+    const since = performance.now() - this.lastLocate;
+    if (since >= INCOMPLETE_RESCAN_MS) {
+      this.lastLocate = performance.now();
+      return true;
+    }
+    if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
+    return false;
+  }
+
+  /** Parts of a diff page that hold no header counters, so scans can skip them. */
+  private bulk(): Element[] {
+    return this.pr?.isDiffView && this.result ? this.regions.find(this.result.files) : [];
   }
 
   /** The closest common ancestor of the first and last file diff on the page. */
@@ -375,8 +415,9 @@ class Controller implements UiActions {
     let first: Element | null = null;
     let last: Element | null = null;
     for (let i = 0; i < files.length && !first; i++) first = document.getElementById(`diff-${files[i]!.digest}`);
+    if (!first) return null;
     for (let i = files.length - 1; i >= 0 && !last; i--) last = document.getElementById(`diff-${files[i]!.digest}`);
-    if (!first || !last) return null;
+    if (!last) return null;
     if (first === last) return first.parentElement;
     const ancestors = new Set<Element>();
     for (let n: Element | null = first; n; n = n.parentElement) ancestors.add(n);
@@ -402,9 +443,10 @@ class Controller implements UiActions {
 
   setActive(active: boolean): void {
     if (!this.pr) return;
-    if (active) this.inactive.delete(this.pr.key);
-    else this.inactive.add(this.pr.key);
-    writeInactive(this.inactive);
+    const inactive = this.inactive();
+    if (active) inactive.delete(this.pr.key);
+    else inactive.add(this.pr.key);
+    writeInactive(inactive);
     this.render();
   }
 
@@ -467,6 +509,11 @@ class Controller implements UiActions {
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
 function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
+}
+
+/** Resolves in a later task, letting the page handle input and render in between. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve));
 }
 
 function filesTabPath(pr: PrRef): string {

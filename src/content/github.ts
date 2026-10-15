@@ -80,7 +80,11 @@ export async function fetchPrFiles(pr: PrRef, signal?: AbortSignal): Promise<PrF
     signal,
   });
   if (!res.ok) throw new Error(`file_tree request failed: HTTP ${res.status}`);
-  const data = JSON.parse(await res.text()) as { diffs?: RawDiff[]; baseRefOid?: string };
+  return parseFileTree(await res.text());
+}
+
+export function parseFileTree(text: string): PrFiles {
+  const data = JSON.parse(text) as { diffs?: RawDiff[]; baseRefOid?: string };
   const files: PrFile[] = [];
   for (const d of data.diffs ?? []) {
     if (!d.path || !d.pathDigest) continue;

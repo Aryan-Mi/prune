@@ -1,5 +1,6 @@
 import { parseCount, replaceCount } from '../../shared/format.ts';
 import type { PrTotals } from '../github.ts';
+import { queryOutside } from './regions.ts';
 
 /**
  * Rewrites the PR header's line counts (+additions −deletions) and the
@@ -25,6 +26,7 @@ interface AttrPatch {
 }
 
 const ADDITION_SELECTOR = '.fgColor-success, .color-fg-success';
+const FILES_LINK_SELECTOR = 'a[href$="/files"], a[href$="/changes"]';
 const DELETION_CLASS = /\b(?:fgColor-danger|color-fg-danger)\b/;
 const FILE_DIFF_ID = /^diff-[0-9a-f]{64}$/;
 
@@ -41,6 +43,8 @@ export class CountPatcher {
 
   private counterPatched = false;
   private diffstatPatched = false;
+  /** A full scan found nothing that a scan skipping the `bulk` regions missed. */
+  private bulkChecked = false;
 
   /** Both the header diffstat and the "Files changed" counter were found and patched. */
   isComplete(): boolean {
@@ -61,17 +65,35 @@ export class CountPatcher {
   /**
    * Finds header counters showing `original` and makes them show `kept`.
    * Already-patched nodes are left alone, so calling this repeatedly is cheap
-   * and causes no DOM writes when nothing new appeared.
+   * and causes no DOM writes when nothing new appeared. `bulk` (see regions.ts)
+   * is searched only if something is not found elsewhere.
    */
-  apply(basePath: string, original: PrTotals, kept: PrTotals): void {
+  apply(basePath: string, original: PrTotals, kept: PrTotals, bulk: readonly Element[] = []): void {
     this.prune();
-    this.scanDiffstats(original, kept);
-    this.patchFileCounters(basePath, original.files, kept.files);
+    // One pass over the DOM for both kinds of counters.
+    const additions: Element[] = [];
+    const links: HTMLAnchorElement[] = [];
+    for (const el of queryOutside(`${ADDITION_SELECTOR}, ${FILES_LINK_SELECTOR}`, bulk)) {
+      if (el.matches(ADDITION_SELECTOR)) additions.push(el);
+      if (el.matches(FILES_LINK_SELECTOR)) links.push(el as HTMLAnchorElement);
+    }
+    this.scanDiffstats(original, kept, additions);
+    this.patchFileCounters(basePath, original.files, kept.files, links);
+    if (bulk.length > 0 && !this.bulkChecked && !(this.diffstatPatched && this.counterPatched)) {
+      // Something is missing. Make sure it is not in `bulk`; if it was, keep looking there.
+      const patches = this.texts.length + this.attrs.length;
+      this.apply(basePath, original, kept);
+      this.bulkChecked = this.texts.length + this.attrs.length === patches;
+    }
   }
 
   /** Finds the header diffstat without changing it (used when nothing is pruned). */
-  locate(original: PrTotals): Element | null {
-    if (!this.diffstatAnchor) this.scanDiffstats(original, null);
+  locate(original: PrTotals, bulk: readonly Element[] = []): Element | null {
+    if (!this.diffstatAnchor) this.scanDiffstats(original, null, queryOutside(ADDITION_SELECTOR, bulk));
+    if (!this.diffstatAnchor && bulk.length > 0 && !this.bulkChecked) {
+      this.scanDiffstats(original, null, document.querySelectorAll(ADDITION_SELECTOR));
+      this.bulkChecked = !this.diffstatAnchor;
+    }
     return this.diffstatAnchor;
   }
 
@@ -88,6 +110,7 @@ export class CountPatcher {
     this.anchor = null;
     this.counterPatched = false;
     this.diffstatPatched = false;
+    this.bulkChecked = false;
   }
 
   /** Drops bookkeeping for nodes GitHub removed or rewrote. */
@@ -102,9 +125,9 @@ export class CountPatcher {
     this.diffstatPatched = false;
   }
 
-  private scanDiffstats(original: PrTotals, kept: PrTotals | null): void {
+  private scanDiffstats(original: PrTotals, kept: PrTotals | null, additions: Iterable<Element>): void {
     let first: Element | null = null;
-    for (const add of document.querySelectorAll(ADDITION_SELECTOR)) {
+    for (const add of additions) {
       if (insideFileDiff(add) || add.closest('[data-prune-ui]')) continue;
       const del = nextElement(add);
       if (!del || !DELETION_CLASS.test(del.getAttribute('class') ?? '')) continue;
@@ -147,9 +170,9 @@ export class CountPatcher {
     if (!this.diffstatAnchor) this.anchor = first;
   }
 
-  private patchFileCounters(basePath: string, original: number, kept: number): void {
+  private patchFileCounters(basePath: string, original: number, kept: number, links: Iterable<HTMLAnchorElement>): void {
     const targets = new Set([`${basePath}/files`, `${basePath}/changes`]);
-    for (const link of document.querySelectorAll<HTMLAnchorElement>('a[href$="/files"], a[href$="/changes"]')) {
+    for (const link of links) {
       if (!targets.has(link.pathname)) continue;
       const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {

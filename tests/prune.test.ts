@@ -67,10 +67,10 @@ describe('buildCss', () => {
     const css = buildCss(r, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() });
     expect(css).toContain(`#diff-${lock.digest}`);
     expect(css).toContain(`#file-tree-item-diff-${lock.digest}`);
-    expect(css).toContain('li[role="treeitem"][id="pnpm-lock.yaml"]');
+    expect(css).toContain('li#pnpm-lock\\.yaml[role="treeitem"]');
     // dist/ only contains pruned files, so the directory row goes too.
-    expect(css).toContain('li[role="treeitem"][id="dist"]');
-    expect(css).not.toContain('[id="src"]');
+    expect(css).toContain('li#dist[role="treeitem"]');
+    expect(css).not.toContain('li#src[');
     expect(css).toContain('display: none');
   });
 
@@ -86,8 +86,16 @@ describe('buildCss', () => {
     expect(css).not.toContain('display: none');
   });
 
-  test('escapes quotes in paths', () => {
-    const odd = computePrune([file('weird"name.lock', 1, 1)], {}, compileRules(normalizeSettings({ userPatterns: '*.lock' })), settings);
-    expect(buildCss(odd, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() })).toContain('[id="weird\\"name.lock"]');
+  test('escapes paths into id selectors', () => {
+    const odd = computePrune(
+      [file('weird"name.lock', 1, 1), file('1 a/-2.lock', 1, 1)],
+      {},
+      compileRules(normalizeSettings({ userPatterns: '*.lock' })),
+      settings,
+    );
+    const css = buildCss(odd, { diffMode: 'hide', treeMode: 'hide', revealed: new Set() });
+    expect(css).toContain('li#weird\\"name\\.lock[role="treeitem"]');
+    expect(css).toContain('li#\\31 \\ a\\/-2\\.lock[role="treeitem"]');
+    expect(css).toContain('li#\\31 \\ a[role="treeitem"]');
   });
 });
