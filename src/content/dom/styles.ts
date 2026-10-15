@@ -10,7 +10,8 @@ import type { PruneResult } from '../../shared/prune.ts';
  * Selectors:
  *   #diff-<digest>                        file diff (classic and new UI)
  *   #file-tree-item-diff-<digest>         file tree row (classic UI)
- *   li#<path>[role=treeitem]              file tree row (new UI uses the path as id)
+ *   li#<path>[role=treeitem]              file tree row (new UI uses the path as id;
+ *                                         left out on a page known to be classic)
  *
  * Id selectors, not [id="…"], so the style engine can look rules up by id.
  */
@@ -22,6 +23,11 @@ export interface StyleOptions {
   treeMode: TreeMode;
   /** Digests the user chose to reveal from the "Pruned files" section. */
   revealed: ReadonlySet<string>;
+  /**
+   * The page is known to be the classic UI, so the new UI's tree rows (path
+   * ids: a third of the stylesheet, and all the escaping) are left out.
+   */
+  classic?: boolean;
 }
 
 export class PruneStyles {
@@ -30,7 +36,13 @@ export class PruneStyles {
    * What the stylesheet was built from. The CSS text itself is not kept: it can
    * be ~50 KB on a big PR, and the browser already holds it.
    */
-  private built: { result: PruneResult; diffMode: DiffMode; treeMode: TreeMode; revealed: string } | null = null;
+  private built: {
+    result: PruneResult;
+    diffMode: DiffMode;
+    treeMode: TreeMode;
+    revealed: string;
+    classic: boolean;
+  } | null = null;
   private active = false;
 
   update(result: PruneResult | null, options: StyleOptions): void {
@@ -41,14 +53,17 @@ export class PruneStyles {
     const { diffMode, treeMode } = options;
     const revealed = [...options.revealed].join();
     const built = this.built;
+    // A sheet built for both UIs still does once the page turns out to be classic.
+    const classic = isClassicUi() && (built?.result !== result || built.classic);
     if (
       built?.result !== result ||
       built.diffMode !== diffMode ||
       built.treeMode !== treeMode ||
-      built.revealed !== revealed
+      built.revealed !== revealed ||
+      built.classic !== classic
     ) {
-      this.built = { result, diffMode, treeMode, revealed };
-      const css = buildCss(result, options);
+      this.built = { result, diffMode, treeMode, revealed, classic };
+      const css = buildCss(result, { ...options, classic });
       this.active = css !== '';
       if (!this.active) {
         this.el?.remove();
@@ -77,8 +92,22 @@ export class PruneStyles {
   }
 }
 
+/**
+ * Whether this is the classic "Files changed" page: its server-rendered diff
+ * list is there before PRune's data is. Anything else (not rendered yet, or
+ * the new UI) gets the selectors for both.
+ */
+function isClassicUi(): boolean {
+  return !!document.getElementById('files')?.classList.contains('js-diff-container');
+}
+
+/** Ids that need more than a backslash before some characters. */
+const NEEDS_CODE_POINTS = /^-?\d|^-$|[\0-\x1f\x7f]/;
+
 /** `#id` selector for any id, escaped as `CSS.escape` would. */
 function idSelector(id: string): string {
+  // Nearly every path: only `.`, `/` and the like to escape, no callback needed (twice as fast).
+  if (!NEEDS_CODE_POINTS.test(id)) return `#${id.replace(/[^\w\u0080-\uffff-]/g, '\\$&')}`;
   return `#${id.replace(/^-?\d|^-$|[^\w\u0080-\uffff-]/g, (m) => {
     const prefix = m.length === 2 ? '-' : '';
     const code = m.charCodeAt(m.length - 1);
@@ -91,14 +120,18 @@ function idSelector(id: string): string {
 export function buildCss(result: PruneResult, options: StyleOptions): string {
   const diffSelectors: string[] = [];
   const treeSelectors: string[] = [];
+  // Usually empty; then the digests aren't even hashed for the lookup.
+  const revealed = options.revealed.size > 0 ? options.revealed : null;
+  const newUi = !options.classic;
   for (const file of result.pruned) {
-    if (options.revealed.has(file.digest)) continue;
+    if (revealed?.has(file.digest)) continue;
     diffSelectors.push(`#diff-${file.digest}`);
-    treeSelectors.push(`#file-tree-item-diff-${file.digest}`, `li${idSelector(file.path)}[role="treeitem"]`);
+    treeSelectors.push(`#file-tree-item-diff-${file.digest}`);
+    if (newUi) treeSelectors.push(`li${idSelector(file.path)}[role="treeitem"]`);
   }
   // Directories whose every file is pruned (new UI tree ids are paths).
-  for (const dir of result.prunedDirs) {
-    treeSelectors.push(`li${idSelector(dir)}[role="treeitem"]`);
+  if (newUi) {
+    for (const dir of result.prunedDirs) treeSelectors.push(`li${idSelector(dir)}[role="treeitem"]`);
   }
 
   const rules: string[] = [];
