@@ -5,7 +5,7 @@ import type { PruneResult } from '../shared/prune.ts';
 import { isRepoDisabled, loadSettings, rulesKey, type Settings } from '../shared/settings.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
-import { CountPatcher } from './dom/counts.ts';
+import { CountPatcher, landmarks } from './dom/counts.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
 import { fetchFileTree, fetchPrTotals, fetchRepoConfig, parsePrUrl, type PrRef } from './github.ts';
@@ -18,14 +18,15 @@ import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
 const PR_DATA_TTL_MS = 60_000;
 /** Minimum gap between DOM checks while the page is mutating. */
 const CHECK_INTERVAL_MS = 100;
-/**
- * Minimum gap between whole-page searches for new header counters (e.g.
- * sticky headers) once all are patched. Re-renders of the ones found are
- * caught on every check, by searching only where they were.
- */
-const RESCAN_INTERVAL_MS = 4000;
 /** Whole-page search gap while some header counter has not been found yet (page still rendering). */
 const INCOMPLETE_RESCAN_MS = 250;
+/**
+ * How long after a navigation (and at least until the page has loaded) a
+ * header counter missing from GitHub's landmarks is expected to render in
+ * them. Then the whole page is searched for it once more; after that, it is
+ * only waited for in the landmarks (see `isSettled()`).
+ */
+const GIVE_UP_MS = 2000;
 
 interface PrData {
   /** The PR this data belongs to. */
@@ -71,7 +72,7 @@ class Controller implements UiActions {
   private loadToken = 0;
 
   private readonly styles = new PruneStyles();
-  private readonly counts = new CountPatcher();
+  private readonly counts = new CountPatcher(() => this.scheduleCheck());
   private readonly regions = new BulkRegions();
   /** Collapse mode's, imported when that setting is first on. */
   private collapser: Collapser | null = null;
@@ -80,12 +81,21 @@ class Controller implements UiActions {
   private section: PrunedSection | null = null;
   private sectionContainer: Element | null = null;
 
-  private readonly observer = new MutationObserver(() => this.onChange());
+  /** The whole document until the page has settled, then only around PRune's changes (see `track()`). */
+  private readonly observer = new MutationObserver((records) => this.onMutations(records));
   private checkTimer = 0;
   private retryTimer = 0;
+  /** Searches the whole page after all once a missing counter is no longer expected in the landmarks. */
+  private waitTimer = 0;
   private lastCheck = 0;
   private lastRescan = 0;
   private lastLocate = 0;
+  /** When the current PR page was navigated to. */
+  private shownAt = 0;
+  /** In `check()`, which calls `track()` when done. */
+  private checking = false;
+  /** The page has settled: only what PRune changed or placed is observed (see `track()`). */
+  private watching = false;
 
   start(): void {
     ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
@@ -101,9 +111,9 @@ class Controller implements UiActions {
       return undefined;
     });
 
-    // On PR pages, one observer for the whole page; the callback only schedules
-    // a check (and pauses itself until then), so its cost is constant no matter
-    // how many nodes GitHub adds. Elsewhere only navigations are followed.
+    // On PR pages, one observer; the callback only schedules a check (and
+    // pauses itself until then), so its cost is constant no matter how many
+    // nodes GitHub adds. Elsewhere only navigations are followed.
     onNavigation(() => this.onChange());
     // Back/forward-cache restores bring back a frozen DOM without mutations.
     window.addEventListener('pageshow', (e) => {
@@ -151,9 +161,84 @@ class Controller implements UiActions {
 
   // ---- Scheduling -------------------------------------------------------
 
-  private observe(): void {
-    // The document itself: at document_start <html> may not exist yet.
-    this.observer.observe(document, { childList: true, subtree: true });
+  /**
+   * Chooses what the observer watches until the next check. While the page is
+   * still rendering, that is the whole document. Once everything PRune needs
+   * was found (`isSettled()`), only where that can change: the header parts
+   * holding the counters, and the ancestors of every node PRune patched or
+   * placed, so that their removal is noticed. The diff list and the rest of
+   * the page can then render, lazy-load and re-render without PRune running at
+   * all. GitHub writing into a patched node is handled by `counts` itself.
+   */
+  private track(): void {
+    // A check is due, and will call this when done.
+    if (this.checkTimer) return;
+    this.observer.disconnect();
+    // Off PR pages (or where PRune is off) only navigations are followed.
+    const active = !!this.pr && this.isEnabledHere();
+    if (!active || !this.isSettled()) {
+      this.watching = false;
+      // The document itself: at document_start <html> may not exist yet.
+      if (active) this.observer.observe(document, { childList: true, subtree: true });
+      return;
+    }
+    if (!this.watching) {
+      this.watching = true;
+      // The diff list may have grown since it was last looked for.
+      this.placeSection(true);
+    }
+    const subtrees = this.counts.places();
+    // Collapse mode clicks each pruned file's toggle once its diff shows up.
+    const list = this.collapser?.waiting ? this.regions.diffList() : null;
+    if (list) subtrees.push(list);
+    const seen = new Set<Node>(subtrees);
+    const climb = (node: Node) => {
+      for (let n = node.parentNode; n && n !== document && !seen.has(n); n = n.parentNode) {
+        seen.add(n);
+        this.observer.observe(n, { childList: true });
+      }
+    };
+    for (const el of subtrees) {
+      this.observer.observe(el, { childList: true, subtree: true });
+      climb(el);
+    }
+    // The section's parent is the diff list: its own children are watched too, so the section stays last.
+    for (const node of [...this.counts.patched(), this.indicator?.host, this.section?.host]) {
+      if (node?.isConnected) climb(node);
+    }
+  }
+
+  /**
+   * Everything PRune needs on this page has rendered: the header counters (or
+   * the diffstat the pill goes next to) and the place of the "Pruned files"
+   * section. A counter that is still missing after a while doesn't count if
+   * the header part it would render in is there (and watched from then on).
+   */
+  private isSettled(): boolean {
+    if (document.readyState !== 'complete' || this.status === 'loading') return false;
+    if (this.wantsSection() && !this.section?.host.isConnected) return false;
+    if (this.collapser?.waiting && !this.regions.diffList()) return false;
+    const found = this.isPruning()
+      ? this.counts.isComplete() && this.counts.isIntact()
+      : !this.result || !!this.counts.diffstatAnchor;
+    return found || (this.waitFor() === 0 && landmarks().length > 0);
+  }
+
+  /** How much longer what is missing from the header landmarks is expected to render there (see GIVE_UP_MS). */
+  private waitFor(): number {
+    if (document.readyState !== 'complete') return GIVE_UP_MS;
+    return Math.max(0, this.shownAt + GIVE_UP_MS - performance.now());
+  }
+
+  private onMutations(records: MutationRecord[]): void {
+    const host = this.section?.host;
+    const list = host?.parentNode;
+    if (this.watching && list && records.every((r) => r.target === list)) {
+      // GitHub rendered (or unmounted) diffs: only the section's place may need fixing, and right away.
+      if (list.lastElementChild !== host) this.placeSection(false);
+      return;
+    }
+    this.onChange();
   }
 
   private onChange(): void {
@@ -181,30 +266,31 @@ class Controller implements UiActions {
    */
   private check(fromMutation = true): void {
     this.lastCheck = performance.now();
-    if (location.href !== this.href) {
-      this.href = location.href;
-      const pr = parsePrUrl(location.pathname);
-      // Off PR pages there is nothing to keep up with between navigations.
-      if (pr) this.observe();
-      else this.observer.disconnect();
-      this.onLocationChange(pr);
-      return;
+    // PRune's own changes needn't be observed; track() picks up from here.
+    this.observer.disconnect();
+    this.checking = true;
+    try {
+      if (location.href !== this.href) {
+        this.href = location.href;
+        this.onLocationChange(parsePrUrl(location.pathname));
+      } else if (this.pr && this.isEnabledHere()) {
+        this.update(fromMutation);
+      }
+    } finally {
+      this.checking = false;
     }
-    if (!this.pr) return;
-    this.observe();
-    if (!this.isEnabledHere()) return;
+    this.track();
+  }
+
+  private update(fromMutation: boolean): void {
     this.styles.ensure();
     if (this.isPruning()) {
-      const now = performance.now();
       const intact = this.counts.isIntact();
-      const complete = intact && this.counts.isComplete();
-      const interval = complete ? RESCAN_INTERVAL_MS : INCOMPLETE_RESCAN_MS;
-      const since = now - this.lastRescan;
-      if (!intact || since >= interval) {
-        // While incomplete, apply() searches the whole page only if the likely places come up short.
-        this.applyCounts(complete);
-      } else if (!complete && fromMutation) {
-        this.scheduleRetry(interval - since);
+      if (!intact || !this.counts.isComplete()) {
+        const since = performance.now() - this.lastRescan;
+        // apply() searches the whole page only if the likely places come up short.
+        if (!intact || since >= INCOMPLETE_RESCAN_MS) this.applyCounts();
+        else if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
       }
       if (this.settings.diffMode === 'collapse') this.collapser?.run();
     }
@@ -227,6 +313,7 @@ class Controller implements UiActions {
     }
     const prev = this.pr;
     this.pr = pr;
+    this.shownAt = performance.now();
     if (!pr) {
       this.teardown();
       this.release();
@@ -378,6 +465,17 @@ class Controller implements UiActions {
   }
 
   private render(): void {
+    if (this.checking) {
+      this.paint();
+      return;
+    }
+    // PRune's own changes needn't be observed.
+    this.observer.disconnect();
+    this.paint();
+    this.track();
+  }
+
+  private paint(): void {
     if (!this.pr || !this.isEnabledHere()) {
       this.teardown();
       return;
@@ -422,11 +520,21 @@ class Controller implements UiActions {
     this.collapser.run();
   }
 
-  /** Patches the header counters; `full` searches the whole page instead of where they were last found. */
-  private applyCounts(full = false): void {
+  /** Patches the header counters, searching where they were last found first. */
+  private applyCounts(): void {
     if (!this.pr || !this.result) return;
     const { original, kept } = this.result;
-    if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), full)) this.lastRescan = performance.now();
+    const wait = this.waitFor();
+    if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false, wait > 0)) {
+      this.lastRescan = performance.now();
+    }
+    this.searchAfterWait(!this.counts.isComplete(), wait);
+  }
+
+  /** While something `missing` is waited for in the landmarks, has the whole page searched once that is over. */
+  private searchAfterWait(missing: boolean, wait: number): void {
+    clearTimeout(this.waitTimer);
+    if (missing && wait > 0) this.waitTimer = window.setTimeout(() => this.check(false), wait + 10);
   }
 
   private wantsSection(): boolean {
@@ -441,23 +549,35 @@ class Controller implements UiActions {
     // While pruning, applyCounts() discovers the diffstat; locate() is only for
     // finding where to put the pill when there is nothing to patch.
     if (!anchor && this.result && !this.isPruning() && this.canLocate(fromMutation)) {
-      anchor = this.counts.locate(this.result.original, () => this.bulk());
+      const wait = this.waitFor();
+      anchor = this.counts.locate(this.result.original, () => this.bulk(), wait > 0);
+      this.searchAfterWait(!anchor, wait);
     }
     anchor ??= findDiffstatFallback();
     // Avoid a floating pill flashing while the header is still rendering.
     if (anchor || this.status !== 'loading') indicator.mount(anchor);
     else indicator.unmount();
-    if (this.section && this.wantsSection()) {
-      if (!this.sectionContainer?.isConnected && this.canLocate(fromMutation)) {
-        this.sectionContainer = this.findDiffListContainer();
-      } else if (this.sectionContainer) {
-        // Header rescans grow the diff list as GitHub renders more diffs: stay after the last one.
-        this.sectionContainer = this.regions.diffList() ?? this.sectionContainer;
-      }
-      if (this.sectionContainer) this.section.mount(this.sectionContainer);
-    } else {
+    this.placeSection(this.watching, fromMutation);
+  }
+
+  /**
+   * Puts the "Pruned files" section after the diff list. With `grow`, the list
+   * is looked for again first, in case GitHub rendered more diffs next to it
+   * (whole-page header searches do that too). Once the page has settled, checks
+   * are rare and mean that the surroundings of the list may have changed.
+   */
+  private placeSection(grow: boolean, fromMutation = false): void {
+    if (!this.section || !this.wantsSection()) {
       this.section?.unmount();
+      return;
     }
+    if (!this.sectionContainer?.isConnected) {
+      if (this.canLocate(fromMutation)) this.sectionContainer = this.findDiffListContainer();
+    } else {
+      if (grow) this.bulk();
+      this.sectionContainer = this.regions.diffList() ?? this.sectionContainer;
+    }
+    if (this.sectionContainer) this.section.mount(this.sectionContainer);
   }
 
   /** Rate-limits searches for page parts that may not have rendered yet (queues a retry instead). */

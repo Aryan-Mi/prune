@@ -8,8 +8,10 @@ import { outsideRoots, queryRoots } from './regions.ts';
  *
  * Only `nodeValue` of existing text nodes is changed, never the nodes
  * themselves, so React keeps ownership of its tree: if GitHub re-renders, it
- * simply writes its own value back and we patch it again. Targets are found by
- * the exact totals GitHub reports, which keeps per-file stats untouched.
+ * simply writes its own value back and we patch it again, in the same
+ * microtask (so it never shows), via an observer on exactly the patched nodes.
+ * Targets are found by the exact totals GitHub reports, which keeps per-file
+ * stats untouched.
  */
 
 interface TextPatch {
@@ -34,17 +36,28 @@ const FILE_DIFF_ID = /^diff-[0-9a-f]{64}$/;
 const CAPPED_COUNT = /^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*\+[)\s]*$/;
 
 export class CountPatcher {
+  /**
+   * Watches the patched nodes only (their text, or a patched attribute): GitHub
+   * writing its number back is undone before the page paints, without a check.
+   */
+  private readonly guard = new MutationObserver((records) => this.onGuard(records));
+  /** Called when a patched node now shows something else than either number (e.g. new totals). */
+  private readonly onChange: () => void;
   private texts: TextPatch[] = [];
   private attrs: AttrPatch[] = [];
   private patchedNodes = new WeakSet<Text>();
   private anchor: Element | null = null;
   /**
-   * The smallest element holding every counter found last time (on GitHub,
-   * a small part of the PR header). Searched first next time.
+   * The elements holding the counters found last time (diffstats and "Files
+   * changed" links: a few small parts of the PR header). Searched first next time.
    */
-  private scope: Element | null = null;
+  private holders: Element[] = [];
   /** The numbers last applied; when they change, the whole page is searched again. */
   private values = '';
+
+  constructor(onChange: () => void) {
+    this.onChange = onChange;
+  }
 
   /** Container of the primary header diffstat; the indicator is placed here. */
   get diffstatAnchor(): Element | null {
@@ -75,31 +88,70 @@ export class CountPatcher {
   }
 
   /**
+   * Where the counters render: the header landmarks and the elements that held
+   * the counters found (all small). A counter that (re-)renders later changes
+   * one of their subtrees.
+   */
+  places(): Element[] {
+    const places: Element[] = [];
+    for (const el of [...landmarks(), ...this.holders]) {
+      if (!el.isConnected || places.some((p) => p.contains(el))) continue;
+      for (let i = places.length - 1; i >= 0; i--) if (el.contains(places[i]!)) places.splice(i, 1);
+      places.push(el);
+    }
+    return places;
+  }
+
+  /** The patched nodes (text nodes, elements with a patched attribute). */
+  patched(): Node[] {
+    return [...this.texts.map((p) => p.node), ...this.attrs.map((p) => p.el)];
+  }
+
+  /**
    * Finds header counters showing `original` and makes them show `kept`.
    * Already-patched nodes are left alone, so calling this repeatedly is cheap
    * and causes no DOM writes when nothing new appeared.
    *
-   * Unless `full`, only the part of the header where the counters were found
-   * last time, or else where GitHub's ids say they are, is searched (a few
-   * dozen elements), and the whole page only if something is missing there.
-   * The whole page is searched without `bulk` (see regions.ts), which is
-   * searched only if something is not found elsewhere. Returns whether the
-   * whole page was searched.
+   * Unless `full`, only the elements that held the counters last time, or
+   * else the ones GitHub's ids point to (`landmarks()`), are searched (a few
+   * dozen elements), and the whole page only if something is missing there,
+   * unless `wait`: while the page is still rendering, what is missing from
+   * the landmarks will most likely render in them (e.g. the React header's
+   * diffstat comes after its tabs). The whole page is searched without `bulk`
+   * (see regions.ts), which is searched only if something is not found
+   * elsewhere. Returns whether the whole page was searched.
    */
-  apply(basePath: string, original: PrTotals, kept: PrTotals, bulk: () => readonly Element[], full = true): boolean {
+  apply(
+    basePath: string,
+    original: PrTotals,
+    kept: PrTotals,
+    bulk: () => readonly Element[],
+    full = true,
+    wait = false,
+  ): boolean {
     this.prune();
     const values = `${original.additions} ${original.deletions} ${original.files} ${kept.additions} ${kept.deletions} ${kept.files}`;
     if (values !== this.values) {
-      // Patches outside the scope need the new numbers too.
+      // Patches elsewhere need the new numbers too.
       if (this.texts.length > 0 || this.attrs.length > 0) full = true;
       this.values = values;
     }
     if (!full) {
-      for (const scope of [this.scope, landmarkScope()]) {
-        if (!scope?.isConnected) continue;
-        this.scan(basePath, original, kept, queryWithin(scope, DELETION_SELECTOR), queryWithin(scope, FILES_LINK_SELECTOR));
-        if (this.diffstatPatched && this.counterPatched) {
-          this.scope = scope;
+      const marks = landmarks();
+      for (const scope of [this.holders, marks]) {
+        const els = scope.filter((el) => el.isConnected);
+        if (els.length === 0) continue;
+        const found = this.scan(
+          basePath,
+          original,
+          kept,
+          els.flatMap((el) => queryWithin(el, DELETION_SELECTOR)),
+          els.flatMap((el) => queryWithin(el, FILES_LINK_SELECTOR)),
+        );
+        if ((this.diffstatPatched && this.counterPatched) || (wait && scope === marks)) {
+          this.holders = found;
+          // Every patch is in place: what the guard saw meanwhile were our own writes.
+          this.guard.takeRecords();
           return false;
         }
       }
@@ -126,13 +178,17 @@ export class CountPatcher {
       );
       this.bulkChecked = this.texts.length + this.attrs.length === patches;
     }
-    this.scope = commonAncestor(found);
+    this.holders = found;
+    this.guard.takeRecords();
     return true;
   }
 
-  /** Finds the header diffstat without changing it (used when nothing is pruned). */
-  locate(original: PrTotals, bulk: () => readonly Element[]): Element | null {
+  /** Finds the header diffstat without changing it (used when nothing is pruned); `wait` as for `apply()`. */
+  locate(original: PrTotals, bulk: () => readonly Element[], wait = false): Element | null {
     if (this.diffstatAnchor) return this.diffstatAnchor;
+    const marks = landmarks();
+    this.scanDiffstats(original, null, marks.flatMap((el) => queryWithin(el, DELETION_SELECTOR)), []);
+    if (this.diffstatAnchor || (wait && marks.length > 0)) return this.diffstatAnchor;
     const regions = bulk();
     this.scanDiffstats(original, null, findDeletions(outsideRoots(regions)), []);
     if (!this.diffstatAnchor && regions.length > 0 && !this.bulkChecked) {
@@ -143,6 +199,7 @@ export class CountPatcher {
   }
 
   restore(): void {
+    this.guard.disconnect();
     for (const p of this.texts) {
       if (p.node.isConnected && p.node.nodeValue === p.patched) p.node.nodeValue = p.original;
     }
@@ -153,7 +210,7 @@ export class CountPatcher {
     this.attrs = [];
     this.patchedNodes = new WeakSet();
     this.anchor = null;
-    this.scope = null;
+    this.holders = [];
     this.values = '';
     this.counterPatched = false;
     this.diffstatPatched = false;
@@ -163,20 +220,50 @@ export class CountPatcher {
 
   /** Forgets where the counters were (e.g. another tab of the PR is showing). */
   rescope(): void {
-    this.scope = null;
+    this.holders = [];
     this.counterMisses = 0;
   }
 
   /** Drops bookkeeping for nodes GitHub removed or rewrote. */
   private prune(): void {
+    const before = this.texts.length + this.attrs.length;
     this.texts = this.texts.filter((p) => {
       const alive = p.node.isConnected && p.node.nodeValue === p.patched;
       if (!alive) this.patchedNodes.delete(p.node);
       return alive;
     });
     this.attrs = this.attrs.filter((p) => p.el.isConnected && p.el.getAttribute(p.name) === p.patched);
+    if (this.texts.length + this.attrs.length < before) {
+      // Stop observing the dropped nodes, which would keep them alive.
+      this.guard.disconnect();
+      for (const p of this.texts) this.guard.observe(p.node, { characterData: true });
+      for (const p of this.attrs) this.guard.observe(p.el, { attributes: true, attributeFilter: [p.name] });
+    }
     this.counterPatched = false;
     this.diffstatPatched = false;
+  }
+
+  /**
+   * GitHub wrote to a patched node. Writing back the number it showed before
+   * (a re-render) is undone right away; anything else is left for `apply()`.
+   */
+  private onGuard(records: MutationRecord[]): void {
+    let changed = false;
+    for (const { target } of records) {
+      for (const p of this.texts) {
+        if (p.node !== target || p.node.nodeValue === p.patched) continue;
+        if (p.node.nodeValue === p.original) p.node.nodeValue = p.patched;
+        else changed = true;
+      }
+      for (const p of this.attrs) {
+        if (p.el !== target) continue;
+        const value = p.el.getAttribute(p.name);
+        if (value === p.patched) continue;
+        if (value === p.original) p.el.setAttribute(p.name, p.patched);
+        else changed = true;
+      }
+    }
+    if (changed) this.onChange();
   }
 
   /** Patches the counters among the candidates; returns the elements of those it found. */
@@ -277,6 +364,7 @@ export class CountPatcher {
           if (patched !== title) {
             this.attrs.push({ el, name: 'title', original: title, patched });
             el.setAttribute('title', patched);
+            this.guard.observe(el, { attributes: true, attributeFilter: ['title'] });
           }
         }
       }
@@ -308,6 +396,7 @@ export class CountPatcher {
     this.texts.push({ node, original, patched });
     this.patchedNodes.add(node);
     if (patched !== original) node.nodeValue = patched;
+    this.guard.observe(node, { characterData: true });
   }
 }
 
@@ -334,16 +423,22 @@ function findTabLinks(roots: readonly Element[]): Set<Element> {
 }
 
 /**
- * The part of the PR header holding its counters, by the ids GitHub gives
- * them: `#diffstat` and `#files_tab_counter` (classic UI), and the "Files
- * changed" tab `#prs-files-anchor-tab` (React header, whose diffstat is next
- * to the tabs). Free to look up; whatever it misses is searched for anyway.
+ * The parts of the PR header holding its counters, by the ids GitHub gives
+ * them: `#diffstat` and the "Files changed" link around `#files_tab_counter`
+ * (classic UI), and the navigation around the "Files changed" tab
+ * `#prs-files-anchor-tab` (React header, whose diffstat is next to the tabs).
+ * Free to look up; whatever they miss is searched for anyway. Each is small:
+ * their common ancestor can hold the whole diff list.
  */
-function landmarkScope(): Element | null {
+export function landmarks(): Element[] {
+  const tab = document.getElementById('prs-files-anchor-tab');
+  const counter = document.getElementById('files_tab_counter');
+  const link = tab ? (tab.closest('[data-component="PH_Navigation"]') ?? tab) : (counter?.closest('a') ?? counter);
   const diffstat = document.getElementById('diffstat');
-  const link = document.getElementById('prs-files-anchor-tab') ?? document.getElementById('files_tab_counter');
-  if (diffstat && link) return commonAncestor([diffstat, link]);
-  return link?.closest('[data-component="PH_Navigation"]') ?? link?.closest('a') ?? diffstat;
+  const els: Element[] = [];
+  if (link) els.push(link);
+  if (diffstat && !link?.contains(diffstat)) els.push(diffstat);
+  return els;
 }
 
 /** `root` and its descendants that match `selector`, in document order. */
@@ -351,13 +446,6 @@ function queryWithin(root: Element, selector: string): Element[] {
   const found = [...root.querySelectorAll(selector)];
   if (root.matches(selector)) found.unshift(root);
   return found;
-}
-
-/** The deepest element containing all of `els`; null if that is <body> or above (no point scoping). */
-function commonAncestor(els: readonly Element[]): Element | null {
-  let common: Element | null = els[0] ?? null;
-  for (const el of els) while (common && !common.contains(el)) common = common.parentElement;
-  return common && common !== document.body && common !== document.documentElement ? common : null;
 }
 
 /** The text node that holds the digits inside `el`. */

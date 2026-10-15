@@ -74,12 +74,12 @@ export class Indicator implements EventListenerObject {
 
   /** Places the pill next to `anchor`, or floating bottom-right if there is none. */
   mount(anchor: Element | null): void {
+    // toggle() with a force only writes the class attribute if it changes (remove() always does).
+    this.host.classList.toggle('floating', !anchor);
     if (anchor) {
-      this.host.classList.remove('floating');
       if (this.host.parentElement !== anchor || anchor.lastElementChild !== this.host) anchor.append(this.host);
-    } else {
-      this.host.classList.add('floating');
-      if (this.host.parentElement !== document.body) document.body?.append(this.host);
+    } else if (this.host.parentElement !== document.body) {
+      document.body?.append(this.host);
     }
   }
 
