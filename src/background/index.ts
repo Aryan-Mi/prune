@@ -1,4 +1,5 @@
 import { ext } from '../shared/browser.ts';
+import { applyTotals, isCapped } from '../shared/endpoints.ts';
 import { parseFileTree, type PrFileList } from '../shared/filetree.ts';
 import type { Lookup, Message } from '../shared/messages.ts';
 import { parseRules } from '../shared/matcher.ts';
@@ -10,16 +11,19 @@ import {
   onConfigChanged,
   REMOTE_KEY,
   REMOTE_TTL_MS,
+  rulesKey,
   type RemoteCache,
 } from '../shared/settings.ts';
 import {
   cachePartition,
-  loadFileList,
-  saveFileList,
+  loadResult,
+  rulesFingerprint,
   saveRepoConfig,
-  storedEtag,
+  saveResult,
+  stored,
   storedRepoConfig,
 } from './cache.ts';
+import { fetchesFor, fetchFileList, fetchTotals, prefetch, takePrefetched } from './fetch.ts';
 import { notifyTabs, openTab, setInactive } from './tabs.ts';
 
 /** Rules files larger than this are rejected; real ones are a few KB. */
@@ -79,48 +83,85 @@ function refreshOnce(force = false): Promise<RemoteCache | null> {
 /**
  * Everything a PR page needs before GitHub has answered: settings, the tab's
  * switched-off PRs, and what's stored for this PR so the content script can
- * skip fetching or sending it.
+ * skip fetching or sending it. In Chromium, starts fetching the PR's file list
+ * here for the `prune` message that follows (see fetch.ts).
  */
 async function lookup(msg: Extract<Message, { type: 'lookup' }>, sender: browser.runtime.MessageSender): Promise<Lookup> {
   const partition = cachePartition(sender);
-  const [inactive, settings, etag, repo] = await Promise.all([
+  const entry = partition === null ? null : await stored(partition + msg.key);
+  const fetches = fetchesFor(sender);
+  if (fetches) prefetch(fetchId(sender, msg.key), msg.basePath, entry?.etag ?? null, entry?.capped ?? false);
+  const [inactive, settings, repo] = await Promise.all([
     openTab(sender.tab?.id),
     loadSettings(),
-    partition === null ? null : storedEtag(partition + msg.key),
     partition === null ? null : storedRepoConfig(partition + msg.repoKey),
   ]);
-  return { settings, inactive, etag, repo: settings.useRepoConfig ? repo : { path: null, text: null } };
+  return {
+    settings,
+    inactive,
+    etag: fetches ? null : (entry?.etag ?? null),
+    capped: !fetches && !!entry?.capped,
+    repo: settings.useRepoConfig ? repo : { path: null, text: null },
+    fetches,
+  };
 }
 
+const fetchId = (sender: browser.runtime.MessageSender, key: string) => `${sender.tab?.id}|${key}`;
+
 /**
- * Parses and prunes a PR's file list for a content script. This is the bulk
- * of PRune's work on a big PR (a 700 KB response with 3000 files), and doing
- * it here keeps it off the GitHub page's main thread and out of its memory:
- * the page only gets the pruned files back. Replies null when asked to use a
- * stored list that is gone by now; the content script then sends it.
+ * Prunes a PR's file list for a content script. This is the bulk of PRune's
+ * work on a big PR (a 700 KB response with 3000 files), and doing it here
+ * keeps it off the GitHub page's main thread and out of its memory: the page
+ * only gets the pruned files back. A stored result for the same list and
+ * rules is reused as is. Replies null when the list isn't here after all (a
+ * stored result is gone or for other rules, or fetching it failed); the
+ * content script then sends it.
  */
-async function prune(msg: Extract<Message, { type: 'prune' }>, partition: string | null): Promise<PruneResult | null> {
+async function prune(msg: Extract<Message, { type: 'prune' }>, sender: browser.runtime.MessageSender): Promise<PruneResult | null> {
+  const partition = cachePartition(sender);
   const key = partition === null ? null : partition + msg.key;
-  let files: PrFileList | null;
-  if (msg.fileTree === null) {
-    files = key !== null && msg.etag ? await loadFileList(key, msg.etag) : null;
-    if (!files) return null;
-  } else {
-    files = parseFileTree(msg.fileTree);
-    if (key !== null && msg.etag) saveFileList(key, msg.etag, files).catch(() => {});
-  }
+  const fetches = msg.fileTree === null && msg.etag === null;
+  if (fetches && !fetchesFor(sender)) return null;
+  const prefetched = fetches ? takePrefetched(fetchId(sender, msg.key)) : null;
   if (partition !== null && msg.repoFetched) saveRepoConfig(partition + msg.repoKey, msg.repo).catch(() => {});
   const [settings, remote] = await Promise.all([loadSettings(), loadRemoteCache()]);
   if (settings.remoteUrl && (remote?.url !== settings.remoteUrl || Date.now() - remote.fetchedAt > REMOTE_TTL_MS)) {
     // Content scripts reload when the new copy lands in storage.
     refreshOnce().catch(() => {});
   }
-  const rules = compileRules(settings, {
-    repoText: msg.repo.text,
-    repoPath: msg.repo.path,
-    remoteText: remote?.url === settings.remoteUrl ? remote.text : null,
-  });
-  return computePrune(files, msg.totals, rules, settings);
+  const remoteText = remote?.url === settings.remoteUrl ? remote.text : null;
+  const rules = key === null ? '' : await rulesFingerprint(rulesKey(settings), msg.repo, remoteText);
+
+  let result: PruneResult | null = null;
+  let files: PrFileList | null = null;
+  let etag = msg.etag;
+  if (msg.fileTree !== null) {
+    files = parseFileTree(msg.fileTree);
+  } else if (!fetches) {
+    if (key === null || etag === null) return null;
+    result = await loadResult(key, etag, rules);
+    if (!result) return null;
+  } else {
+    let list = await (prefetched?.list ?? fetchFileList(msg.basePath, key === null ? null : ((await stored(key))?.etag ?? null)));
+    if (list && !list.files) {
+      // Not modified: the stored result, unless the rules changed since. Then the list after all.
+      result = key === null ? null : await loadResult(key, list.etag ?? '', rules);
+      if (!result) list = await fetchFileList(msg.basePath, null);
+    }
+    etag = list?.etag ?? null;
+    files = list?.files ?? null;
+  }
+  if (!result) {
+    if (!files) return null;
+    const compiled = compileRules(settings, { repoText: msg.repo.text, repoPath: msg.repo.path, remoteText });
+    result = computePrune(files, {}, compiled, settings);
+    if (key !== null && etag) saveResult(key, etag, rules, result).catch(() => {});
+  }
+  // In the page this is up to the content script.
+  if (fetches && isCapped(result)) {
+    result = applyTotals(result, await (prefetched?.totals ?? fetchTotals(msg.basePath)));
+  }
+  return result;
 }
 
 // Respond via sendResponse + `return true`: works in Firefox and in every
@@ -130,7 +171,7 @@ ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: u
   if (msg.type === 'open-options') task = ext.runtime.openOptionsPage();
   else if (msg.type === 'refresh-remote') task = refreshOnce(msg.force);
   else if (msg.type === 'lookup') task = lookup(msg, sender);
-  else if (msg.type === 'prune') task = prune(msg, cachePartition(sender));
+  else if (msg.type === 'prune') task = prune(msg, sender);
   else if (msg.type === 'set-inactive') task = setInactive(sender.tab?.id, msg.keys);
   if (!task) return undefined;
   task.then(

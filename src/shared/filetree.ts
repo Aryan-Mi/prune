@@ -81,32 +81,6 @@ export class PrFileList {
       generated: this.isGenerated(i),
     };
   }
-
-  /** Plain JSON for extension storage (it can't hold typed arrays): about half the size of GitHub's response. */
-  toStored(): StoredFileList {
-    const generated: number[] = [];
-    for (let i = 0; i < this.length; i++) if (this.generated[i]) generated.push(i);
-    return { paths: this.paths, digests: this.digests, lines: Array.from(this.lines.subarray(0, this.length * 2)), generated };
-  }
-
-  static fromStored(stored: StoredFileList): PrFileList {
-    const n = stored.paths.length;
-    const list = new PrFileList(n);
-    for (let i = 0; i < n; i++) {
-      list.push(stored.paths[i]!, stored.digests[i]!, stored.lines[i * 2] ?? 0, stored.lines[i * 2 + 1] ?? 0, false);
-    }
-    for (const i of stored.generated) if (i < n) list.generated[i] = 1;
-    return list;
-  }
-}
-
-export interface StoredFileList {
-  paths: string[];
-  digests: string[];
-  /** Additions and deletions, interleaved. */
-  lines: number[];
-  /** Indexes of linguist-generated files. */
-  generated: number[];
 }
 
 interface RawDiff {

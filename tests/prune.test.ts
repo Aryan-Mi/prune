@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { PrFileList, type PrFile } from '../src/shared/filetree.ts';
 import { buildCss } from '../src/content/dom/styles.ts';
+import { applyTotals, isCapped } from '../src/shared/endpoints.ts';
 import { computePrune, prunePr } from '../src/shared/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from '../src/shared/settings.ts';
@@ -37,6 +38,15 @@ describe('computePrune', () => {
   test('uses GitHub totals when given (file list may be capped)', () => {
     const r = computePrune(files, { additions: 10_000, deletions: 5_000, files: 4000 }, compileRules(settings), settings);
     expect(r.kept).toEqual({ additions: 9250, deletions: 3870, files: 3997 });
+  });
+
+  test('GitHub totals can be applied afterwards, and are only needed for capped lists', () => {
+    const r = computePrune(files, {}, compileRules(settings), settings);
+    expect(isCapped(r)).toBe(false);
+    expect(isCapped({ ...r, listed: 3000 })).toBe(true);
+    const totals = { additions: 10_000, deletions: 5_000, files: 4000 };
+    expect(applyTotals(r, totals)).toEqual(computePrune(files, totals, compileRules(settings), settings));
+    expect(applyTotals(r, {})).toEqual(r);
   });
 
   test('repo rules, remote rules and personal rules layer in order', () => {

@@ -1,32 +1,46 @@
 import { ext } from '../shared/browser.ts';
-import { PrFileList, type StoredFileList } from '../shared/filetree.ts';
+import { isCapped } from '../shared/endpoints.ts';
 import type { RepoConfig } from '../shared/messages.ts';
+import type { PruneResult } from '../shared/prune.ts';
 
 /**
- * PR file lists the background script has parsed before, kept in
- * storage.session (in memory, gone when the browser closes, and it outlives
- * the service worker / event page) along with the ETag GitHub sent.
+ * Results the background script has computed before, kept in storage.session
+ * (in memory, gone when the browser closes, and it outlives the service
+ * worker / event page) along with the ETag GitHub sent for the file list and
+ * a fingerprint of the rules they were computed with.
  *
- * GitHub's ETag for the file_tree response is a hash of its body. When the
- * content script gets a response with the ETag of a stored list, the stored
- * list is exactly what GitHub sent, so a revisited PR's 700 KB response is
- * never read in the page or passed along (and the browser's HTTP cache has
- * usually saved downloading it again). A stored list is only ever used after
- * GitHub answered that same request for this tab, so access is still checked.
+ * GitHub's ETag for the file_tree response is a hash of its body. When a
+ * response has the ETag of a stored result and the rules are unchanged, the
+ * stored result is exactly what pruning the response would give, so a
+ * revisited PR's 700 KB response is never read in the page, passed along or
+ * parsed (and the browser's HTTP cache has usually saved downloading it
+ * again). A stored result is only ever used after GitHub answered a request
+ * for it with the tab's cookies, so access is still checked.
+ *
+ * Only results are kept, not file lists: they hold just the pruned files, so
+ * they're a fraction of the size. When the rules change, the list is sent or
+ * fetched once more instead.
  */
 
-/** Lists kept at most; the oldest are dropped first. */
-const MAX_LISTS = 8;
+/** Results kept at most; the oldest are dropped first. */
+const MAX_RESULTS = 32;
 /**
- * Rough cap on what the lists take in storage.session, which lives in the
- * browser's memory for the whole session: ~3 lists of 3000 files, or hundreds
- * of typical PRs (Chromium would allow 10 MB in total).
+ * Rough cap on what results take in storage.session, which lives in the
+ * browser's memory for the whole session. A typical result is a few KB; one
+ * pruning hundreds of vendored files is ~50 KB.
  */
-const MAX_BYTES = 1024 * 1024;
-const INDEX_KEY = 'fileLists';
+const MAX_BYTES = 512 * 1024;
+const INDEX_KEY = 'results';
 
-interface IndexEntry {
+export interface Stored {
   etag: string;
+  /** Fingerprint of the rules (see rulesFingerprint()). */
+  rules: string;
+  /** The list was capped, so GitHub's totals are needed too. */
+  capped: boolean;
+}
+
+interface IndexEntry extends Stored {
   bytes: number;
   usedAt: number;
 }
@@ -51,55 +65,73 @@ function serially<T>(task: () => Promise<T>): Promise<T> {
   return next;
 }
 
-const listKey = (key: string) => `fileList:${key}`;
+const resultKey = (key: string) => `result:${key}`;
 
-/** The ETag of the stored list for `key`, if any. */
-export async function storedEtag(key: string): Promise<string | null> {
-  return (await readIndex())[key]?.etag ?? null;
+/** What's stored for `key`, if anything. */
+export async function stored(key: string): Promise<Stored | null> {
+  const entry = (await readIndex())[key];
+  return entry ? { etag: entry.etag, rules: entry.rules, capped: entry.capped } : null;
 }
 
-/** The stored list for `key`, if it's the one GitHub sent with `etag`. */
-export async function loadFileList(key: string, etag: string): Promise<PrFileList | null> {
-  if ((await readIndex())[key]?.etag !== etag) return null;
-  const stored = (await ext.storage.session.get(listKey(key)))[listKey(key)] as
-    | (StoredFileList & { etag: string })
+/** The stored result for `key`, if it was computed from the list GitHub sent with `etag`, with `rules`. */
+export async function loadResult(key: string, etag: string, rules: string): Promise<PruneResult | null> {
+  const entry = (await readIndex())[key];
+  if (entry?.etag !== etag || entry.rules !== rules) return null;
+  const value = (await ext.storage.session.get(resultKey(key)))[resultKey(key)] as
+    | { etag: string; rules: string; result: PruneResult }
     | undefined;
-  if (stored?.etag !== etag) return null;
+  if (value?.etag !== etag || value.rules !== rules) return null;
   serially(async () => {
-    const entry = (await readIndex())[key];
-    if (entry) entry.usedAt = Date.now();
+    const current = (await readIndex())[key];
+    if (current) current.usedAt = Date.now();
   }).catch(() => {});
-  return PrFileList.fromStored(stored);
+  return value.result;
 }
 
-export function saveFileList(key: string, etag: string, files: PrFileList): Promise<void> {
+export function saveResult(key: string, etag: string, rules: string, result: PruneResult): Promise<void> {
   return serially(async () => {
     const idx = await readIndex();
-    const stored = files.toStored();
-    let bytes = 64 * files.length;
-    for (const p of stored.paths) bytes += p.length;
-    idx[key] = { etag, bytes, usedAt: Date.now() };
+    idx[key] = { etag, rules, capped: isCapped(result), bytes: resultBytes(result), usedAt: Date.now() };
     const evicted: string[] = [];
     const byAge = Object.keys(idx).sort((a, b) => idx[a]!.usedAt - idx[b]!.usedAt);
     let total = byAge.reduce((sum, k) => sum + idx[k]!.bytes, 0);
     for (const k of byAge) {
-      if (byAge.length - evicted.length <= MAX_LISTS && total <= MAX_BYTES) break;
+      if (byAge.length - evicted.length <= MAX_RESULTS && total <= MAX_BYTES) break;
       total -= idx[k]!.bytes;
       evicted.push(k);
       delete idx[k];
     }
     try {
-      if (evicted.length) await ext.storage.session.remove(evicted.map(listKey));
-      if (idx[key]) await ext.storage.session.set({ [listKey(key)]: { ...stored, etag }, [INDEX_KEY]: idx });
+      if (evicted.length) await ext.storage.session.remove(evicted.map(resultKey));
+      if (idx[key]) await ext.storage.session.set({ [resultKey(key)]: { etag, rules, result }, [INDEX_KEY]: idx });
       else await ext.storage.session.set({ [INDEX_KEY]: idx });
     } catch {
       // Out of quota or storage.session unavailable: start over.
       index = Promise.resolve({});
       const all = await ext.storage.session.get(null).catch(() => ({}));
-      const keys = Object.keys(all).filter((k) => k === INDEX_KEY || k.startsWith('fileList:'));
+      const keys = Object.keys(all).filter((k) => k === INDEX_KEY || k.startsWith('result:'));
       await ext.storage.session.remove(keys).catch(() => {});
     }
   });
+}
+
+/** Roughly what `result` takes in storage. */
+function resultBytes(result: PruneResult): number {
+  let bytes = 256 + 80 * result.probes.length;
+  for (const f of result.pruned) bytes += 160 + f.path.length + f.rule.length + f.source.length;
+  for (const dir of result.prunedDirs) bytes += 16 + dir.length;
+  return bytes;
+}
+
+/**
+ * Identifies everything besides the file list that decides a result: the
+ * settings that pick rules, the repository's and the remote rules file, and
+ * the built-in rules (by extension version).
+ */
+export async function rulesFingerprint(rulesKey: string, repo: RepoConfig, remoteText: string | null): Promise<string> {
+  const text = JSON.stringify([ext.runtime.getManifest().version, rulesKey, repo.path, repo.text, remoteText]);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return btoa(String.fromCharCode(...digest));
 }
 
 /** How long a repository's .pruneignore is reused before it's fetched again. */

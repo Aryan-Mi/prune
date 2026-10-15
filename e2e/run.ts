@@ -177,15 +177,23 @@ try {
   const back = await readHeader(page);
   check('header stays pruned after navigating back', back.additions === expected.additions, `got +${back.additions}`);
 
-  // ---- Reloads: the background script's stored file list ------------------------
+  // ---- Reloads: the background script's fetches and stored results ----------------
   const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
   const storedKey = '|vitejs/vite#23648';
   type Ext = { chrome: typeof browser };
   const index = await worker.evaluate(async () => {
-    const stored = await (globalThis as unknown as Ext).chrome.storage.session.get('fileLists');
-    return stored.fileLists as Record<string, unknown> | undefined;
+    const stored = await (globalThis as unknown as Ext).chrome.storage.session.get('results');
+    return stored.results as Record<string, unknown> | undefined;
   });
-  check('background script stored the file list', !!index?.[storedKey], Object.keys(index ?? {}).join(', '));
+  check('background script stored the result', !!index?.[storedKey], Object.keys(index ?? {}).join(', '));
+  // In Chromium the background script fetches the file list; the page requests no PR data at all.
+  // (GitHub's own UI requests diffstat and tab_counts too, with headers of its own.)
+  const pageRequests: string[] = [];
+  page.on('request', (req) => {
+    if (req.url().includes('/page_data/') && !req.headers()['github-verified-fetch']) {
+      pageRequests.push(new URL(req.url()).pathname);
+    }
+  });
   const reloadedHeader = async () => {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
@@ -201,18 +209,33 @@ try {
     return h;
   };
   const reloaded = await reloadedHeader();
-  check('pruned on reload (stored list)', reloaded.additions === expected.additions, `got +${reloaded.additions}`);
-  // The list is gone but its ETag is still indexed: the content script must send it after all.
+  check('pruned on reload (stored result)', reloaded.additions === expected.additions, `got +${reloaded.additions}`);
+  const ours = pageRequests.filter((p) => /\/page_data\/(file_tree|diffstat|tab_counts)$/.test(p));
+  check('the page fetches no file list or totals', ours.length === 0, ours.join(', '));
+  // The result is gone but its ETag is still indexed: GitHub's 304 isn't enough, the list is needed after all.
   await worker.evaluate(
-    (key) => (globalThis as unknown as Ext).chrome.storage.session.remove(`fileList:${key}`),
+    (key) => (globalThis as unknown as Ext).chrome.storage.session.remove(`result:${key}`),
     storedKey,
   );
   const refetched = await reloadedHeader();
   check(
-    'pruned on reload when the stored list is gone',
+    'pruned on reload when the stored result is gone',
     refetched.additions === expected.additions,
     `got +${refetched.additions}`,
   );
+  // The background script's fetch fails: the page fetches and sends the list itself, as in Firefox.
+  await context.route('**/page_data/file_tree', (route) =>
+    route.request().serviceWorker() ? route.abort() : route.fallback(),
+  );
+  await worker.evaluate(() => (globalThis as unknown as Ext).chrome.storage.session.remove('results'));
+  pageRequests.length = 0;
+  const fallback = await reloadedHeader();
+  check(
+    'pruned on reload when the background fetch fails',
+    fallback.additions === expected.additions && pageRequests.some((p) => p.endsWith('/file_tree')),
+    `got +${fallback.additions}; page requested ${pageRequests.join(', ') || 'nothing'}`,
+  );
+  await context.unrouteAll();
 
   // ---- Per-tab toggle and settings changes (kept and pushed by the background script) ----
   const readUntil = async (want: number | null) => {
