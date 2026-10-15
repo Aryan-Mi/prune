@@ -330,7 +330,8 @@ class Controller implements UiActions {
     }
     const pruning = this.isPruning();
     if (pruning && this.result) {
-      this.styles.update(this.result, {
+      // Only diff views have file diffs and a file tree to hide.
+      this.styles.update(this.pr.isDiffView ? this.result : null, {
         diffMode: this.settings.diffMode,
         treeMode: this.settings.treeMode,
         revealed: this.revealedSet(),

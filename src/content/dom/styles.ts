@@ -10,7 +10,9 @@ import type { PruneResult } from '../prune.ts';
  * Selectors:
  *   #diff-<digest>                        file diff (classic and new UI)
  *   #file-tree-item-diff-<digest>         file tree row (classic UI)
- *   li[role=treeitem][id="<path>"]        file tree row (new UI uses the path as id)
+ *   li#<path>[role=treeitem]              file tree row (new UI uses the path as id)
+ *
+ * Id selectors, not [id="…"], so the style engine can look rules up by id.
  */
 
 const STYLE_ID = 'prune-style';
@@ -55,8 +57,15 @@ export class PruneStyles {
   }
 }
 
-function cssString(value: string): string {
-  return `"${value.replace(/[\\"]/g, '\\$&').replace(/\n/g, '\\a ')}"`;
+/** `#id` selector for any id, escaped as `CSS.escape` would. */
+function idSelector(id: string): string {
+  return `#${id.replace(/^-?\d|^-$|[^\w\u0080-\uffff-]/g, (m) => {
+    const prefix = m.length === 2 ? '-' : '';
+    const code = m.charCodeAt(m.length - 1);
+    if (code === 0) return '\ufffd';
+    if (code < 0x20 || code === 0x7f || (code >= 0x30 && code <= 0x39)) return `${prefix}\\${code.toString(16)} `;
+    return `\\${m}`;
+  })}`;
 }
 
 export function buildCss(result: PruneResult, options: StyleOptions): string {
@@ -65,11 +74,11 @@ export function buildCss(result: PruneResult, options: StyleOptions): string {
   for (const file of result.pruned) {
     if (options.revealed.has(file.digest)) continue;
     diffSelectors.push(`#diff-${file.digest}`);
-    treeSelectors.push(`#file-tree-item-diff-${file.digest}`, `li[role="treeitem"][id=${cssString(file.path)}]`);
+    treeSelectors.push(`#file-tree-item-diff-${file.digest}`, `li${idSelector(file.path)}[role="treeitem"]`);
   }
   // Directories whose every file is pruned (new UI tree ids are paths).
   for (const dir of fullyPrunedDirs(result)) {
-    treeSelectors.push(`li[role="treeitem"][id=${cssString(dir)}]`);
+    treeSelectors.push(`li${idSelector(dir)}[role="treeitem"]`);
   }
 
   const rules: string[] = [];
