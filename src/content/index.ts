@@ -398,6 +398,9 @@ class Controller implements UiActions {
     if (this.section && this.wantsSection()) {
       if (!this.sectionContainer?.isConnected && this.canLocate(fromMutation)) {
         this.sectionContainer = this.findDiffListContainer();
+      } else if (this.sectionContainer) {
+        // Header rescans grow the diff list as GitHub renders more diffs: stay after the last one.
+        this.sectionContainer = sectionContainer(this.regions.diffList()) ?? this.sectionContainer;
       }
       if (this.sectionContainer) this.section.mount(this.sectionContainer);
     } else {
@@ -421,10 +424,10 @@ class Controller implements UiActions {
     return this.pr?.isDiffView && this.result ? this.regions.find(this.result) : [];
   }
 
-  /** The element whose children are the file diffs. */
+  /** Where the "Pruned files" section goes: after the file diffs. */
   private findDiffListContainer(): Element | null {
     this.bulk();
-    return this.regions.diffList();
+    return sectionContainer(this.regions.diffList());
   }
 
   private teardown(): void {
@@ -540,6 +543,15 @@ function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
 function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
+}
+
+/**
+ * The element to append the section to, given the element whose children are
+ * the file diffs found so far. The classic UI loads diffs in batches, each in a
+ * container of its own: the section goes after the last one, not the first.
+ */
+function sectionContainer(list: Element | null): Element | null {
+  return list?.closest('.js-diff-progressive-container')?.parentElement ?? list;
 }
 
 /** Messages the background script; it replies `{ error }` when something failed. */
