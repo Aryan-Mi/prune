@@ -370,25 +370,32 @@ class Controller implements UiActions {
     let anchor = this.counts.diffstatAnchor;
     // While pruning, applyCounts() discovers the diffstat; locate() is only for
     // finding where to put the pill when there is nothing to patch.
-    if (!anchor && this.result && !this.isPruning()) {
-      const since = performance.now() - this.lastLocate;
-      if (since >= INCOMPLETE_RESCAN_MS) {
-        this.lastLocate = performance.now();
-        anchor = this.counts.locate(this.result.original, this.bulk());
-      } else if (fromMutation) {
-        this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
-      }
+    if (!anchor && this.result && !this.isPruning() && this.canLocate(fromMutation)) {
+      anchor = this.counts.locate(this.result.original, this.bulk());
     }
     anchor ??= findDiffstatFallback();
     // Avoid a floating pill flashing while the header is still rendering.
     if (anchor || this.status !== 'loading') this.indicator.mount(anchor);
     else this.indicator.unmount();
     if (this.wantsSection()) {
-      if (!this.sectionContainer?.isConnected) this.sectionContainer = this.findDiffListContainer();
+      if (!this.sectionContainer?.isConnected && this.canLocate(fromMutation)) {
+        this.sectionContainer = this.findDiffListContainer();
+      }
       if (this.sectionContainer) this.section.mount(this.sectionContainer);
     } else {
       this.section.unmount();
     }
+  }
+
+  /** Rate-limits searches for page parts that may not have rendered yet (queues a retry instead). */
+  private canLocate(fromMutation: boolean): boolean {
+    const since = performance.now() - this.lastLocate;
+    if (since >= INCOMPLETE_RESCAN_MS) {
+      this.lastLocate = performance.now();
+      return true;
+    }
+    if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
+    return false;
   }
 
   /** Parts of a diff page that hold no header counters, so scans can skip them. */
@@ -403,8 +410,9 @@ class Controller implements UiActions {
     let first: Element | null = null;
     let last: Element | null = null;
     for (let i = 0; i < files.length && !first; i++) first = document.getElementById(`diff-${files[i]!.digest}`);
+    if (!first) return null;
     for (let i = files.length - 1; i >= 0 && !last; i--) last = document.getElementById(`diff-${files[i]!.digest}`);
-    if (!first || !last) return null;
+    if (!last) return null;
     if (first === last) return first.parentElement;
     const ancestors = new Set<Element>();
     for (let n: Element | null = first; n; n = n.parentElement) ancestors.add(n);
