@@ -82,11 +82,12 @@ Performance was a design constraint from the start:
 - **The heavy lifting happens off the page.** The content script fetches that response (it has to, for your session) and hands the text straight to the extension's background script, which parses it and runs the rules. Only the pruned files come back. On a 3,000-file PR the page never parses the 700 KB response, never holds the file list, and doesn't even load the rule matcher.
 - **Hiding is one stylesheet.** GitHub gives every file diff the DOM id `diff-<sha256(path)>`, in both the classic and the new React "Files changed" UI. PRune injects a single `<style>` with rules for those ids, and the browser applies it to diffs as they stream in, lazy-load or re-render. There's no per-file JavaScript and no node is ever moved, so React's tree is never disturbed.
 - **Counts are patched in place.** The header's text nodes get their `nodeValue` rewritten (never replaced), found by matching the exact totals GitHub reports. If React re-renders, PRune notices and re-applies.
-- **One cheap observer.** A single `MutationObserver` only schedules a check, and pauses until it has run. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows). Looking for the header counters skips the diff list and file tree, which on a big PR are nearly the whole page.
+- **Almost nothing runs outside PRs.** The content script is only injected on PR pages. The rest of GitHub gets a ~500-byte loader that listens for GitHub's navigation events and imports the content script if you open a PR without a page load. Neither watches the DOM there.
+- **One cheap observer.** On a PR page, a single `MutationObserver` only schedules a check, and pauses until it has run. Checks are coalesced (at most every 100 ms), do no work when nothing changed, and never read layout (no forced reflows). Looking for the header counters skips the diff list and file tree, which on a big PR are nearly the whole page.
 - **Fast matching.** Slash-free patterns are tested on the file name and, once per directory, on the directory names (Set lookups, `endsWith`, and one combined regex), so 3,000 paths against all defaults take ~1.5 ms, in the background script.
 - **Lazy UI.** The popover's file list is built on first open, and the "Pruned files" rows when the section scrolls near the viewport.
 
-On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 8 ms of the page's main-thread time in total on the conversation tab and 12 ms on the Files changed tab, no single task longer than ~3 ms, and keeps ~120–170 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~1 ms and ~55 KB. The background script's share (parsing and matching, ~4 ms) runs in the extension's own process, and the file list is dropped as soon as it's done.
+On an 8,161-file PR (`nodejs/node#65161`), PRune spends about 8 ms of the page's main-thread time in total on the conversation tab and 12 ms on the Files changed tab, no single task longer than ~3 ms, and keeps ~120–170 KB of memory in the page (`node bench/live.ts`). Elsewhere on GitHub it costs ~0.1 ms and ~3 KB. The background script's share (parsing and matching, ~4 ms) runs in the extension's own process, and the file list is dropped as soon as it's done.
 
 ## Development
 
@@ -108,7 +109,9 @@ bun run bench:latency   # time until the pruned numbers show up
 src/
   shared/      settings, defaults, .gitignore matcher, rule layering,
                file_tree parsing + which files are pruned (run in background/)
-  content/     the GitHub content script
+  content/     the GitHub content script (PR pages)
+    loader.ts  the one for other GitHub pages: loads the content script on soft navigation to a PR
+    route.ts   PR URLs + following GitHub's navigation
     github.ts  URL parsing + GitHub data endpoints
     dom/       stylesheet hiding, header count patching, collapse mode
     ui/        the ✂ pill + popover, the "Pruned files" section (Shadow DOM)
