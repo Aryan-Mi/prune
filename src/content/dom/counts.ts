@@ -8,8 +8,10 @@ import { outsideRoots, queryRoots } from './regions.ts';
  *
  * Only `nodeValue` of existing text nodes is changed, never the nodes
  * themselves, so React keeps ownership of its tree: if GitHub re-renders, it
- * simply writes its own value back and we patch it again. Targets are found by
- * the exact totals GitHub reports, which keeps per-file stats untouched.
+ * simply writes its own value back and we patch it again, in the same
+ * microtask (so it never shows), via an observer on exactly the patched nodes.
+ * Targets are found by the exact totals GitHub reports, which keeps per-file
+ * stats untouched.
  */
 
 interface TextPatch {
@@ -34,6 +36,13 @@ const FILE_DIFF_ID = /^diff-[0-9a-f]{64}$/;
 const CAPPED_COUNT = /^[\s\u00a0(]*\d[\d.,\u00a0\u202f ]*\+[)\s]*$/;
 
 export class CountPatcher {
+  /**
+   * Watches the patched nodes only (their text, or a patched attribute): GitHub
+   * writing its number back is undone before the page paints, without a check.
+   */
+  private readonly guard = new MutationObserver((records) => this.onGuard(records));
+  /** Called when a patched node now shows something else than either number (e.g. new totals). */
+  private readonly onChange: () => void;
   private texts: TextPatch[] = [];
   private attrs: AttrPatch[] = [];
   private patchedNodes = new WeakSet<Text>();
@@ -45,6 +54,10 @@ export class CountPatcher {
   private holders: Element[] = [];
   /** The numbers last applied; when they change, the whole page is searched again. */
   private values = '';
+
+  constructor(onChange: () => void) {
+    this.onChange = onChange;
+  }
 
   /** Container of the primary header diffstat; the indicator is placed here. */
   get diffstatAnchor(): Element | null {
@@ -107,6 +120,8 @@ export class CountPatcher {
         );
         if (this.diffstatPatched && this.counterPatched) {
           this.holders = found;
+          // Every patch is in place: what the guard saw meanwhile were our own writes.
+          this.guard.takeRecords();
           return false;
         }
       }
@@ -134,6 +149,7 @@ export class CountPatcher {
       this.bulkChecked = this.texts.length + this.attrs.length === patches;
     }
     this.holders = found;
+    this.guard.takeRecords();
     return true;
   }
 
@@ -150,6 +166,7 @@ export class CountPatcher {
   }
 
   restore(): void {
+    this.guard.disconnect();
     for (const p of this.texts) {
       if (p.node.isConnected && p.node.nodeValue === p.patched) p.node.nodeValue = p.original;
     }
@@ -176,14 +193,44 @@ export class CountPatcher {
 
   /** Drops bookkeeping for nodes GitHub removed or rewrote. */
   private prune(): void {
+    const before = this.texts.length + this.attrs.length;
     this.texts = this.texts.filter((p) => {
       const alive = p.node.isConnected && p.node.nodeValue === p.patched;
       if (!alive) this.patchedNodes.delete(p.node);
       return alive;
     });
     this.attrs = this.attrs.filter((p) => p.el.isConnected && p.el.getAttribute(p.name) === p.patched);
+    if (this.texts.length + this.attrs.length < before) {
+      // Stop observing the dropped nodes, which would keep them alive.
+      this.guard.disconnect();
+      for (const p of this.texts) this.guard.observe(p.node, { characterData: true });
+      for (const p of this.attrs) this.guard.observe(p.el, { attributes: true, attributeFilter: [p.name] });
+    }
     this.counterPatched = false;
     this.diffstatPatched = false;
+  }
+
+  /**
+   * GitHub wrote to a patched node. Writing back the number it showed before
+   * (a re-render) is undone right away; anything else is left for `apply()`.
+   */
+  private onGuard(records: MutationRecord[]): void {
+    let changed = false;
+    for (const { target } of records) {
+      for (const p of this.texts) {
+        if (p.node !== target || p.node.nodeValue === p.patched) continue;
+        if (p.node.nodeValue === p.original) p.node.nodeValue = p.patched;
+        else changed = true;
+      }
+      for (const p of this.attrs) {
+        if (p.el !== target) continue;
+        const value = p.el.getAttribute(p.name);
+        if (value === p.patched) continue;
+        if (value === p.original) p.el.setAttribute(p.name, p.patched);
+        else changed = true;
+      }
+    }
+    if (changed) this.onChange();
   }
 
   /** Patches the counters among the candidates; returns the elements of those it found. */
@@ -284,6 +331,7 @@ export class CountPatcher {
           if (patched !== title) {
             this.attrs.push({ el, name: 'title', original: title, patched });
             el.setAttribute('title', patched);
+            this.guard.observe(el, { attributes: true, attributeFilter: ['title'] });
           }
         }
       }
@@ -315,6 +363,7 @@ export class CountPatcher {
     this.texts.push({ node, original, patched });
     this.patchedNodes.add(node);
     if (patched !== original) node.nodeValue = patched;
+    this.guard.observe(node, { characterData: true });
   }
 }
 

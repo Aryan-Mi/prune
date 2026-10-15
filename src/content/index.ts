@@ -70,7 +70,7 @@ class Controller implements UiActions {
   private loadToken = 0;
 
   private readonly styles = new PruneStyles();
-  private readonly counts = new CountPatcher();
+  private readonly counts = new CountPatcher(() => this.scheduleCheck());
   private readonly regions = new BulkRegions();
   private readonly collapser = new Collapser();
   // Created on the first PR page, dropped when leaving PR pages.
