@@ -149,6 +149,13 @@ try {
   await section.scrollIntoViewIfNeeded();
   await section.locator('.item').first().waitFor({ timeout: 5_000 }).catch(() => {});
   check('"Pruned files" section lists it', (await section.locator('.box').textContent())?.includes('pnpm-lock.yaml') ?? false);
+  const diffsAfter = await page.evaluate(() => {
+    const host = document.querySelector('[data-prune-ui="section"]')!;
+    return [...document.querySelectorAll('[id^="diff-"]')].filter(
+      (d) => /^diff-[0-9a-f]{64}$/.test(d.id) && host.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).length;
+  });
+  check('section comes after all diffs', diffsAfter === 0, `${diffsAfter} diffs after it`);
   const filesHeader = await readHeader(page);
   check(
     'files tab header counts are pruned too',

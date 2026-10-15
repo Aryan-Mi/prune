@@ -18,9 +18,13 @@ const PR_DATA_TTL_MS = 60_000;
 const REPO_CONFIG_TTL_MS = 10 * 60_000;
 /** Minimum gap between DOM checks while the page is mutating. */
 const CHECK_INTERVAL_MS = 100;
-/** Minimum gap between full rescans for new header counters (e.g. sticky headers). */
-const RESCAN_INTERVAL_MS = 1000;
-/** Rescan gap while some header counter has not been found yet (page still rendering). */
+/**
+ * Minimum gap between whole-page searches for new header counters (e.g.
+ * sticky headers) once all are patched. Re-renders of the ones found are
+ * caught on every check, by searching only where they were.
+ */
+const RESCAN_INTERVAL_MS = 4000;
+/** Whole-page search gap while some header counter has not been found yet (page still rendering). */
 const INCOMPLETE_RESCAN_MS = 250;
 const INACTIVE_KEY = 'prune:inactive';
 
@@ -183,8 +187,8 @@ class Controller implements UiActions {
       const interval = complete ? RESCAN_INTERVAL_MS : INCOMPLETE_RESCAN_MS;
       const since = now - this.lastRescan;
       if (!intact || since >= interval) {
-        this.lastRescan = now;
-        this.applyCounts();
+        // While incomplete, apply() searches the whole page only if the likely places come up short.
+        this.applyCounts(complete);
       } else if (!complete && fromMutation) {
         this.scheduleRetry(interval - since);
       }
@@ -213,6 +217,8 @@ class Controller implements UiActions {
       this.release();
       return;
     }
+    // Counters found where expected are enough at first; the whole-page search for more can wait.
+    this.lastRescan = performance.now();
     if (prev?.key !== pr.key) {
       this.teardown();
       this.sectionContainer = null;
@@ -220,10 +226,11 @@ class Controller implements UiActions {
       this.load(pr);
     } else {
       // Same PR, different tab: refresh if the data is getting old.
-      const cached = this.prCache.get(pr.key);
-      if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS) this.load(pr);
+      this.counts.rescope();
       this.sectionContainer = null;
       this.regions.reset();
+      const cached = this.prCache.get(pr.key);
+      if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS) this.load(pr);
       this.revealFromHash();
       this.render();
     }
@@ -372,9 +379,11 @@ class Controller implements UiActions {
     this.mountUi();
   }
 
-  private applyCounts(): void {
+  /** Patches the header counters; `full` searches the whole page instead of where they were last found. */
+  private applyCounts(full = false): void {
     if (!this.pr || !this.result) return;
-    this.counts.apply(this.pr.basePath, this.result.original, this.result.kept, this.bulk());
+    const { original, kept } = this.result;
+    if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), full)) this.lastRescan = performance.now();
   }
 
   private wantsSection(): boolean {
@@ -389,7 +398,7 @@ class Controller implements UiActions {
     // While pruning, applyCounts() discovers the diffstat; locate() is only for
     // finding where to put the pill when there is nothing to patch.
     if (!anchor && this.result && !this.isPruning() && this.canLocate(fromMutation)) {
-      anchor = this.counts.locate(this.result.original, this.bulk());
+      anchor = this.counts.locate(this.result.original, () => this.bulk());
     }
     anchor ??= findDiffstatFallback();
     // Avoid a floating pill flashing while the header is still rendering.
@@ -400,7 +409,7 @@ class Controller implements UiActions {
         this.sectionContainer = this.findDiffListContainer();
       } else if (this.sectionContainer) {
         // Header rescans grow the diff list as GitHub renders more diffs: stay after the last one.
-        this.sectionContainer = sectionContainer(this.regions.diffList()) ?? this.sectionContainer;
+        this.sectionContainer = this.regions.diffList() ?? this.sectionContainer;
       }
       if (this.sectionContainer) this.section.mount(this.sectionContainer);
     } else {
@@ -427,7 +436,7 @@ class Controller implements UiActions {
   /** Where the "Pruned files" section goes: after the file diffs. */
   private findDiffListContainer(): Element | null {
     this.bulk();
-    return sectionContainer(this.regions.diffList());
+    return this.regions.diffList();
   }
 
   private teardown(): void {
@@ -543,15 +552,6 @@ function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
 function findDiffstatFallback(): Element | null {
   return document.getElementById('diffstat');
-}
-
-/**
- * The element to append the section to, given the element whose children are
- * the file diffs found so far. The classic UI loads diffs in batches, each in a
- * container of its own: the section goes after the last one, not the first.
- */
-function sectionContainer(list: Element | null): Element | null {
-  return list?.closest('.js-diff-progressive-container')?.parentElement ?? list;
 }
 
 /** Messages the background script; it replies `{ error }` when something failed. */
