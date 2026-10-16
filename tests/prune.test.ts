@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { PrFileList, type PrFile } from '../src/shared/filetree.ts';
-import { buildCss } from '../src/content/dom/styles.ts';
+import { buildCss, lazyCss } from '../src/content/dom/styles.ts';
 import { applyTotals, isCapped } from '../src/shared/totals.ts';
 import { computePrune, prunePr } from '../src/shared/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
@@ -149,5 +149,29 @@ describe('buildCss', () => {
     expect(css).toContain('li#weird\\"name\\.lock[role="treeitem"]');
     expect(css).toContain('li#\\31 \\ a\\/-2\\.lock[role="treeitem"]');
     expect(css).toContain('li#\\31 \\ a[role="treeitem"]');
+  });
+});
+
+describe('lazyCss', () => {
+  const many = PrFileList.of(Array.from({ length: 20 }, (_, i) => file(`vendor/${i}.js`, 1, 1)));
+  const r = computePrune(many, {}, compileRules(normalizeSettings({ userPatterns: 'vendor/' })), settings);
+
+  test('renders pruned diffs lazily: the classic body, or the whole new UI diff', () => {
+    const [first] = lazyCss(r);
+    const digest = r.pruned[0]!.digest;
+    expect(first).toContain(`#diff-${digest} > .js-file-content`);
+    expect(first).toContain(`#diff-${digest}:not(.js-file)`);
+    expect(first).toContain('content-visibility: auto');
+    expect(first).not.toContain('html[');
+  });
+
+  test('groups of eight settle one by one, each behind its token in Chromium', () => {
+    const groups = lazyCss(r, true);
+    expect(r.pruned).toHaveLength(20);
+    expect(groups).toHaveLength(3);
+    expect(groups[2]!.match(/#diff-/g)).toHaveLength(2 * 4);
+    groups.forEach((css, i) => {
+      for (const selector of css.split('\n')) expect(selector.startsWith(`html[data-prune-lazy~="${i}"] #diff-`)).toBe(true);
+    });
   });
 });
