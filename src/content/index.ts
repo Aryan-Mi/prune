@@ -60,7 +60,7 @@ interface CacheEntry {
   files: boolean;
 }
 
-class Controller implements UiActions {
+class Controller implements UiActions, EventListenerObject {
   /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
   private settings!: PageSettings;
   private configured = false;
@@ -75,8 +75,10 @@ class Controller implements UiActions {
   private readonly prCache = new Map<string, CacheEntry>();
   /** Responses fetched while settings were still loading. */
   private prefetched: { key: string; files: boolean; promise: Promise<PrResponses> } | null = null;
-  /** The PR whose pruned files the ✂ popover is about to show. */
+  /** The PR whose pruned files the ✂ popover or its diffs are about to show. */
   private filesFor = '';
+  /** "Files changed" links that ask for the pruned files once the pointer reaches them. */
+  private readonly armed = new WeakSet<Element>();
   private readonly revealed = new Map<string, Set<string>>();
   /** PRs switched off in this tab; the background script keeps them across page loads. */
   private readonly inactive = new Set<string>();
@@ -600,6 +602,22 @@ class Controller implements UiActions {
     if (anchor || this.status !== 'loading') indicator.mount(anchor);
     else indicator.unmount();
     this.placeSection(this.watching, fromMutation);
+    // A summary: the diffs will want the pruned files, so they're asked for
+    // when the pointer reaches the "Files changed" tab (or it gets focus),
+    // before the diffs render.
+    if (this.result?.partial) {
+      for (const link of this.counts.filesLinks()) {
+        if (this.armed.has(link)) continue;
+        this.armed.add(link);
+        link.addEventListener('pointerenter', this, { once: true });
+        link.addEventListener('focus', this, { once: true });
+      }
+    }
+  }
+
+  /** A "Files changed" link was reached (see `mountUi()`). */
+  handleEvent(): void {
+    this.needFiles();
   }
 
   /**
