@@ -17,9 +17,9 @@ import type { PruneResult } from '../../shared/prune.ts';
  *
  * The sheet is written once per PR and settings, never for a click: in
  * Chromium, any change to a GitHub page's stylesheets restyles nearly the
- * whole document (~1 s on a 3,000-file diff: GitHub links one sheet with
- * cascade layers several times, and then Chromium re-matches all of its
- * rules), while an attribute change only restyles the elements it affects.
+ * whole document (~8k elements, ~1 s on a 3,000-file diff: GitHub links its
+ * `@layer primer-react` CSS 4–5 times, and then Chromium re-matches all of
+ * its rules), while an attribute change only restyles the elements it affects.
  * So a file shown again from the "Pruned files" section gets a
  * `data-prune-show` attribute (its rules end in `:not([data-prune-show])`),
  * and in Chromium every rule starts with `html[data-prune-on]`, an attribute
@@ -28,11 +28,13 @@ import type { PruneResult } from '../../shared/prune.ts';
  * sheet, but an ancestor selector like `html[…]` would make it restyle
  * everything, both when the sheet changes and when the attribute does (past
  * 150 selectors). There the rules start at the id and the sheet is taken out
- * instead. And because of Chromium's restyle, a PR seen before gets the sheet
- * as soon as the background script answers, from its stored result: before
- * the page's first paint, that restyle is part of the first one. (The answer often comes just
- * then: page loading tasks go first. Inserted on another tab of the PR, after
- * the first paint, it would cost a restyle that may never pay off, so it isn't.)
+ * instead. And because of Chromium's restyle, the only cheap time to insert
+ * the sheet is before the page's first paint, when that restyle is part of the
+ * first one. So a PR seen before gets it at document_start from its pre-render
+ * (dom/prerender.ts), or else as soon as the background script answers, from
+ * its stored result (the answer often comes just before the first paint: page
+ * loading tasks go first). Inserted on another tab of the PR, after the first
+ * paint, it would cost a restyle that may never pay off, so it isn't.
  *
  * Pruned diffs shown again render lazily at first, with `content-visibility:
  * auto`: switching PRune off on a big PR would otherwise style and lay out
