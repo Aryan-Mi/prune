@@ -1,6 +1,6 @@
 import type { PrunedFile, PruneResult } from '../../shared/prune.ts';
 import { formatCount } from '../../shared/format.ts';
-import { BASE_CSS, el, icon, ICON_CHEVRON, ICON_SCISSORS, LIST_CSS, statElement, styleElement, whyText } from './theme.ts';
+import { BASE_CSS, el, icon, LIST_CSS, statElement, styleElement, whyText } from './theme.ts';
 import type { UiActions, ViewState } from './types.ts';
 
 const CSS = /* css */ `
@@ -11,8 +11,8 @@ const CSS = /* css */ `
 .title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; }
 .title strong { font-size: 13px; font-weight: 600; }
 .title .mark { color: var(--p-done); }
-.chevron { color: var(--p-muted); transition: transform 160ms cubic-bezier(.2,.8,.2,1); transform: rotate(-90deg); }
-.box.open .chevron { transform: none; }
+.icon-chevron { color: var(--p-muted); transition: transform 160ms cubic-bezier(.2,.8,.2,1); transform: rotate(-90deg); }
+.box.open .icon-chevron { transform: none; }
 .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--p-done-bg); color: var(--p-done); font-size: 12px; font-weight: 500; line-height: 18px; text-align: center; }
 .rows { list-style: none; margin: 0; padding: 0; display: none; }
 .box.open .rows { display: block; }
@@ -26,7 +26,7 @@ const CSS = /* css */ `
 .box.open .note { display: block; }
 .link { border: 0; background: none; padding: 0; color: var(--p-accent); cursor: pointer; }
 .link:hover { text-decoration: underline; }
-@media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .icon-chevron { transition: none; } }
 `;
 
 /** Whether the box is expanded. Outlives the section, which is recreated per PR page visit. */
@@ -68,7 +68,7 @@ export class SectionBox implements EventListenerObject {
     const result = state.result;
     if (!result) return;
     const ui = (this.ui ??= this.build());
-    ui.box.classList.toggle('open', open);
+    ui.box.className = open ? 'box open' : 'box';
     ui.title.setAttribute('aria-expanded', String(open));
     if (ui.shows !== result) {
       ui.shows = result;
@@ -89,11 +89,9 @@ export class SectionBox implements EventListenerObject {
     const bar = el('div', 'bar');
     const title = el('button', 'title');
     title.type = 'button';
-    const mark = icon(ICON_SCISSORS);
-    mark.classList.add('mark');
     const count = el('span', 'count');
     const stat = el('span');
-    title.append(icon(ICON_CHEVRON), mark, el('strong', '', 'Pruned files'), count, stat);
+    title.append(icon('chevron'), icon('scissors', 'mark'), el('strong', '', 'Pruned files'), count, stat);
     const toggleAll = el('button', 'btn');
     toggleAll.type = 'button';
     bar.append(title, toggleAll);
@@ -126,8 +124,8 @@ export class SectionBox implements EventListenerObject {
       this.actions.setAllRevealed(!allRevealed(state));
     } else if (button === ui.settings) {
       this.actions.openSettings();
-    } else if (button.dataset.i !== undefined) {
-      const file = result.pruned[Number(button.dataset.i)];
+    } else if (button.hasAttribute('data-i')) {
+      const file = result.pruned[Number(button.getAttribute('data-i'))];
       if (!file) return;
       const revealed = state.revealed.has(file.digest);
       this.actions.setRevealed(file.digest, !revealed);
@@ -163,8 +161,9 @@ function renderRows(ui: Box, result: PruneResult, revealed: ReadonlySet<string>)
   for (const file of result.pruned) {
     if (!item) break;
     const shown = any && revealed.has(file.digest);
-    if (item.classList.contains('revealed') !== shown) {
-      item.classList.toggle('revealed', shown);
+    const className = shown ? 'item revealed' : 'item';
+    if (item.className !== className) {
+      item.className = className;
       item.lastChild!.textContent = shown ? 'Hide diff' : 'Show diff';
     }
     item = item.nextElementSibling;
@@ -210,8 +209,8 @@ function fillRow(item: HTMLLIElement, file: PrunedFile, i: number, revealed: boo
   stat.firstChild!.textContent = `+${formatCount(file.additions)}`;
   stat.lastChild!.textContent = ` −${formatCount(file.deletions)}`;
   const button = item.lastChild as HTMLElement;
-  button.dataset.i = String(i);
+  button.setAttribute('data-i', String(i));
   button.textContent = revealed ? 'Hide diff' : 'Show diff';
-  if (revealed) item.classList.add('revealed');
+  if (revealed) item.className = 'item revealed';
   return item;
 }

@@ -1,5 +1,5 @@
 import { formatCount } from '../../shared/format.ts';
-import { el, icon, ICON_GEAR, ICON_SCISSORS, LIST_CSS, pathElement, statElement, styleElement, whyElement } from './theme.ts';
+import { el, icon, LIST_CSS, pathElement, statElement, styleElement, whyElement } from './theme.ts';
 import type { UiActions, ViewState } from './types.ts';
 
 const POPOVER_CSS = /* css */ `
@@ -194,12 +194,13 @@ export class Popover implements EventListenerObject {
     const button = (e.target as Element).closest('button');
     const state = this.state;
     if (!button || !state) return;
-    if (button.classList.contains('switch')) {
+    const i = button.getAttribute('data-i');
+    if (button.className === 'switch') {
       this.actions.setActive(!state.active);
-    } else if (button.classList.contains('icon-btn')) {
+    } else if (button.className === 'icon-btn') {
       this.actions.openSettings();
-    } else if (button.dataset.i !== undefined) {
-      const file = state.result?.pruned[Number(button.dataset.i)];
+    } else if (i !== null) {
+      const file = state.result?.pruned[Number(i)];
       if (!file) return;
       this.close();
       this.actions.goToFile(file);
@@ -229,7 +230,7 @@ export class Popover implements EventListenerObject {
 
     const head = el('div', 'head');
     const title = el('div', 'title');
-    title.append(icon(ICON_SCISSORS), el('span', '', 'PRune'));
+    title.append(icon('scissors'), el('span', '', 'PRune'));
     const switchId = 'prune-switch';
     const toggleLabel = el('label', 'toggle-label', state.active ? 'Pruning on' : 'Pruning off');
     toggleLabel.htmlFor = switchId;
@@ -258,7 +259,7 @@ export class Popover implements EventListenerObject {
       if (result.removed.files > 0) {
         const compare = el('div', 'compare');
         const was = statElement(result.original.additions, result.original.deletions);
-        was.classList.add('was');
+        was.className += ' was';
         compare.append(was, el('span', 'arrow', '→'), statElement(result.kept.additions, result.kept.deletions));
         summary.append(compare);
       }
@@ -281,7 +282,7 @@ export class Popover implements EventListenerObject {
           const li = el('li');
           const row = el('button', 'row');
           row.type = 'button';
-          row.dataset.i = String(i);
+          row.setAttribute('data-i', String(i));
           row.title = `${file.path}\nMatched “${file.rule}” · ${file.source}\nClick to view the diff`;
           row.append(pathElement(file.path), statElement(file.additions, file.deletions), whyElement(file));
           li.append(row);
@@ -297,7 +298,7 @@ export class Popover implements EventListenerObject {
     settings.type = 'button';
     settings.title = 'PRune settings';
     settings.setAttribute('aria-label', 'PRune settings');
-    settings.append(icon(ICON_GEAR));
+    settings.append(icon('gear'));
     foot.append(settings);
     frag.append(foot);
 
