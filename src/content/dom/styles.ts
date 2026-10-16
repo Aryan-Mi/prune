@@ -29,8 +29,10 @@ import type { PruneResult } from '../../shared/prune.ts';
  * everything, both when the sheet changes and when the attribute does (past
  * 150 selectors). There the rules start at the id and the sheet is taken out
  * instead. For the same reason a PR seen before gets the sheet as soon as the
- * background script answers, from its stored result: while GitHub's HTML is
- * still being parsed, the restyle is one its own sheets cause anyway.
+ * background script answers, from its stored result: before the page's first
+ * paint, the restyle is part of the first one. (The answer often comes just
+ * then: page loading tasks go first. Inserted on another tab of the PR, after
+ * the first paint, it would cost a restyle that may never pay off, so it isn't.)
  *
  * Pruned diffs shown again render lazily at first, with `content-visibility:
  * auto`: switching PRune off on a big PR would otherwise style and lay out
@@ -154,7 +156,7 @@ export class PruneStyles {
   ensure(): void {
     if (!this.on || !this.el) return;
     if (this.leaveTimer && !this.diffsShown()) {
-      this.off();
+      this.off(false);
       return;
     }
     if (this.settling) this.stopSettling();
@@ -182,20 +184,23 @@ export class PruneStyles {
     return this.marked;
   }
 
-  /** Stops applying the rules, keeping them for when they apply again (same PR). */
-  off(): void {
+  /**
+   * Stops applying the rules, keeping them for when they apply again (same
+   * PR). Shown pruned diffs settle, unless they're gone (`settle` false).
+   */
+  off(settle = true): void {
     this.waiting = false;
     this.stopLeaving();
     if (!this.on) return;
     this.on = false;
     if (GATED) document.documentElement.removeAttribute(ON_ATTR);
     else this.el?.remove();
-    this.settle();
+    if (settle) this.settle();
   }
 
   /** Stops applying the rules and forgets them (another PR, or none). */
   clear(): void {
-    this.off();
+    this.off(false);
     this.stopSettling();
     if (GATED) document.documentElement.removeAttribute(LAZY_ATTR);
     for (const el of this.lazy) el.remove();
@@ -216,7 +221,7 @@ export class PruneStyles {
   private leave(): void {
     if (!this.on || this.leaveTimer) return;
     if (!this.diffsShown()) {
-      this.off();
+      this.off(false);
       return;
     }
     this.leaveTimer = window.setTimeout(() => this.off(), LEAVE_MS);
