@@ -533,6 +533,7 @@ class Controller implements UiActions {
       }
     } else if (snapshot && this.status === 'loading' && this.isActive()) {
       // The pre-render shows until the data is here (also on another tab of the PR).
+      this.revealFromHash(snapshot.result);
       this.styles.update(this.pr.isDiffView ? snapshot.result : null, {
         diffMode: snapshot.diffMode,
         treeMode: snapshot.treeMode,
@@ -690,8 +691,10 @@ class Controller implements UiActions {
       return;
     }
     this.dropSnapshot();
-    // Back to a PR whose data is here (e.g. from the back/forward cache).
-    if (!pr || !storage || (this.data?.key === pr.key && this.status === 'ready')) return;
+    // Back to a PR whose data is here (e.g. from the back/forward cache). The
+    // root element is there at document_start (Chromium, Firefox), but checked.
+    if (!pr || !storage || !document.documentElement) return;
+    if (this.data?.key === pr.key && this.status === 'ready') return;
     const value = readSnapshot(storage, pr.key);
     if (!value) return;
     if (this.configured && !this.fits(pr, value)) {
@@ -701,14 +704,10 @@ class Controller implements UiActions {
     this.preShown = { key: pr.key, value };
     this.storedRaw = { key: pr.key, raw: value.raw };
     this.countMarks.start(value.result.original, value.result.kept);
-    // Rendering waits for the settings; once they are known it keeps this up.
-    if (pr.isDiffView && !this.configured) {
-      const hash = /^#diff-([0-9a-f]{64})/.exec(location.hash)?.[1];
-      this.styles.update(value.result, {
-        diffMode: value.diffMode,
-        treeMode: value.treeMode,
-        revealed: new Set(hash ? [hash] : []),
-      });
+    // Rendering waits for the settings; once they are known it keeps this up. A
+    // link to a pruned file's diff shows it, which can't be done before then.
+    if (pr.isDiffView && !this.configured && !hashedFile(value.result)) {
+      this.styles.update(value.result, { diffMode: value.diffMode, treeMode: value.treeMode, revealed: new Set() });
     }
   }
 
@@ -754,9 +753,9 @@ class Controller implements UiActions {
   }
 
   /** Visiting `#diff-<digest>` of a pruned file (e.g. from a link) reveals it. */
-  private revealFromHash(): void {
-    const m = /^#diff-([0-9a-f]{64})/.exec(location.hash);
-    if (m && this.result?.pruned.some((f) => f.digest === m[1])) this.revealedSet().add(m[1]!);
+  private revealFromHash(result = this.result): void {
+    const digest = result && hashedFile(result);
+    if (digest) this.revealedSet().add(digest);
   }
 
   // ---- UiActions --------------------------------------------------------
@@ -839,6 +838,12 @@ function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise
     if (map.get(key) === entry) map.delete(key);
   }, ttl + 1000);
   return entry;
+}
+
+/** The pruned file whose diff the URL points to (`#diff-<digest>`), if any. */
+function hashedFile(result: PruneResult): string | null {
+  const digest = /^#diff-([0-9a-f]{64})/.exec(location.hash)?.[1];
+  return digest && result.pruned.some((f) => f.digest === digest) ? digest : null;
 }
 
 /** Runs `task` when the page is idle (soon, at the latest). */
