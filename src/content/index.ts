@@ -14,6 +14,9 @@ import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
 import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
 
+// Times are Date.now(): precise enough for these, and performance.now() would
+// have the page set up the Performance interface in this script's world.
+
 /** A PR's result is reused across tab switches for this long before refetching. */
 const PR_DATA_TTL_MS = 60_000;
 /** Minimum gap between DOM checks while the page is mutating. */
@@ -226,7 +229,7 @@ class Controller implements UiActions {
   /** How much longer what is missing from the header landmarks is expected to render there (see GIVE_UP_MS). */
   private waitFor(): number {
     if (document.readyState !== 'complete') return GIVE_UP_MS;
-    return Math.max(0, this.shownAt + GIVE_UP_MS - performance.now());
+    return Math.max(0, this.shownAt + GIVE_UP_MS - Date.now());
   }
 
   private onMutations(records: MutationRecord[]): void {
@@ -251,7 +254,7 @@ class Controller implements UiActions {
     // Until the check runs, further mutations would change nothing, so don't
     // have the browser record them (a big PR page makes thousands).
     this.observer.disconnect();
-    const wait = Math.max(0, CHECK_INTERVAL_MS - (performance.now() - this.lastCheck));
+    const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - this.lastCheck));
     this.checkTimer = window.setTimeout(() => {
       this.checkTimer = 0;
       this.check();
@@ -264,7 +267,7 @@ class Controller implements UiActions {
    * pieces), one trailing retry is queued so the last mutation is never missed.
    */
   private check(fromMutation = true): void {
-    this.lastCheck = performance.now();
+    this.lastCheck = Date.now();
     // PRune's own changes needn't be observed; track() picks up from here.
     this.observer.disconnect();
     this.checking = true;
@@ -286,7 +289,7 @@ class Controller implements UiActions {
     if (this.isPruning()) {
       const intact = this.counts.isIntact();
       if (!intact || !this.counts.isComplete()) {
-        const since = performance.now() - this.lastRescan;
+        const since = Date.now() - this.lastRescan;
         // apply() searches the whole page only if the likely places come up short.
         if (!intact || since >= INCOMPLETE_RESCAN_MS) this.applyCounts();
         else if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
@@ -312,14 +315,14 @@ class Controller implements UiActions {
     }
     const prev = this.pr;
     this.pr = pr;
-    this.shownAt = performance.now();
+    this.shownAt = Date.now();
     if (!pr) {
       this.teardown();
       this.release();
       return;
     }
     // Counters found where expected are enough at first; the whole-page search for more can wait.
-    this.lastRescan = performance.now();
+    this.lastRescan = Date.now();
     if (prev?.key !== pr.key) {
       this.teardown();
       this.sectionContainer = null;
@@ -528,7 +531,7 @@ class Controller implements UiActions {
     const { original, kept } = this.result;
     const wait = this.waitFor();
     if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false, wait > 0)) {
-      this.lastRescan = performance.now();
+      this.lastRescan = Date.now();
     }
     this.searchAfterWait(!this.counts.isComplete(), wait);
   }
@@ -584,9 +587,9 @@ class Controller implements UiActions {
 
   /** Rate-limits searches for page parts that may not have rendered yet (queues a retry instead). */
   private canLocate(fromMutation: boolean): boolean {
-    const since = performance.now() - this.lastLocate;
+    const since = Date.now() - this.lastLocate;
     if (since >= INCOMPLETE_RESCAN_MS) {
-      this.lastLocate = performance.now();
+      this.lastLocate = Date.now();
       return true;
     }
     if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
