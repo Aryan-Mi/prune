@@ -3,14 +3,13 @@ import {
   clearSnapshots,
   decode,
   encode,
-  fingerprint,
   MAX_ENTRIES,
   MAX_ENTRY_CHARS,
   MAX_TOTAL_CHARS,
   readSnapshot,
   sameTotals,
   saveSnapshot,
-  storedFingerprint,
+  storedText,
 } from '../src/content/dom/prerender.ts';
 import type { PrunedFile, PruneResult } from '../src/shared/prune.ts';
 
@@ -70,11 +69,10 @@ test('a stored pre-render reads back as the files and totals it was made from', 
   const back = decode(raw)!;
   expect(back.diffMode).toBe('hide');
   expect(back.treeMode).toBe('dim');
-  expect(fingerprint(raw)).not.toBe(fingerprint(encode(r, 'hide', 'hide')));
   const s = new MemoryStorage();
-  expect(storedFingerprint(s, 'a/b#1')).toBeNull();
+  expect(storedText(s, 'a/b#1')).toBeNull();
   saveSnapshot(s, 'a/b#1', raw);
-  expect(storedFingerprint(s, 'a/b#1')).toBe(fingerprint(raw));
+  expect(storedText(s, 'a/b#1')).toBe(raw);
   expect(back.result.pruned.map((f) => [f.digest, f.path])).toEqual(r.pruned.map((f) => [f.digest, f.path]));
   expect(back.result.prunedDirs).toEqual(['vendor']);
   expect(back.result.original).toEqual(r.original);

@@ -149,24 +149,15 @@ export function decode(raw: string): Snapshot | null {
 }
 
 /**
- * `fingerprint()` of what is stored for `key` (a PR key), to tell whether
- * there is anything new to store. Not taken when reading a pre-render: that
- * is on the way of the page's first frame, this is for when it's idle.
+ * The text stored for `key` (a PR key), to tell whether there is anything new
+ * to store: comparing strings is native, and nothing is kept between writes.
  */
-export function storedFingerprint(storage: Storage, key: string): number | null {
+export function storedText(storage: Storage, key: string): string | null {
   try {
-    const raw = storage.getItem(PREFIX + key);
-    return raw === null ? null : fingerprint(raw);
+    return storage.getItem(PREFIX + key);
   } catch {
     return null;
   }
-}
-
-/** A hash of `text` (FNV-1a): what is stored can be compared without keeping it. */
-export function fingerprint(text: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
-  return hash >>> 0;
 }
 
 function isStrings(value: unknown): value is string[] {

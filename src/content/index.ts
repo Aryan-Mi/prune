@@ -10,13 +10,13 @@ import { CountPatcher, landmarks } from './dom/counts.ts';
 import {
   clearSnapshots,
   CountMarks,
+  decode,
   encode,
-  fingerprint,
   pageStorage,
   readSnapshot,
   sameTotals,
   saveSnapshot,
-  storedFingerprint,
+  storedText,
   type Snapshot,
 } from './dom/prerender.ts';
 import { BulkRegions } from './dom/regions.ts';
@@ -131,8 +131,6 @@ class Controller implements UiActions, EventListenerObject {
   /** The stored pre-render of the PR shown, from the first frame until its data has settled in. */
   private preShown: { key: string; value: Snapshot } | null = null;
   private readonly countMarks = new CountMarks();
-  /** What is stored for the PR last shown (its fingerprint), so the same isn't written again. */
-  private storedHash: { key: string; hash: number } | null = null;
   /** Collapse mode's, imported when that setting is first on. */
   private collapser: Collapser | null = null;
   // Created on the first PR page, dropped when leaving PR pages.
@@ -216,7 +214,6 @@ class Controller implements UiActions, EventListenerObject {
     // Rare enough to start over: every PR's pre-render was for the old settings.
     const store = pageStore();
     if (store) clearSnapshots(store);
-    this.storedHash = null;
     // Results are only kept for the pruned files. Other PRs' are dropped
     // too, so that they are looked up again before they are shown.
     this.prCache.clear();
@@ -851,8 +848,6 @@ class Controller implements UiActions, EventListenerObject {
       return;
     }
     this.preShown = { key: pr.key, value };
-    // What is stored is hashed when it's next written (see `remember()`).
-    if (this.storedHash?.key === pr.key) this.storedHash = null;
     this.countMarks.start(value.result.original, value.result.kept);
     // Rendering waits for the settings; once they are known it keeps this up. A
     // link to a pruned file's diff shows it, which can't be done before then.
@@ -892,20 +887,17 @@ class Controller implements UiActions, EventListenerObject {
         this.forgetPr(pr.key);
         return;
       }
+      const stored = storedText(store, pr.key);
       // A summary (no diffs here) only stands in for the files kept last
       // time if its numbers have changed: the counters must show the new ones.
-      const prev = result.partial ? readSnapshot(store, pr.key) : null;
+      const prev = result.partial && stored ? decode(stored) : null;
       const same = prev && sameTotals(prev, result) && prev.diffMode === diffMode && prev.treeMode === treeMode;
-      const raw = encode(same ? prev.result : result, diffMode, treeMode);
-      const hash = fingerprint(raw);
-      const stored = this.storedHash?.key === pr.key ? this.storedHash.hash : storedFingerprint(store, pr.key);
-      saveSnapshot(store, pr.key, raw, stored === hash);
-      this.storedHash = { key: pr.key, hash };
+      const raw = same ? stored! : encode(result, diffMode, treeMode);
+      saveSnapshot(store, pr.key, raw, raw === stored);
     });
   }
 
   private forgetPr(key: string): void {
-    if (this.storedHash?.key === key) this.storedHash = null;
     const store = pageStore();
     if (store) clearSnapshots(store, (k) => k === key);
   }
