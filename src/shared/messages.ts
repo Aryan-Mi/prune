@@ -1,4 +1,5 @@
 import type { PrTotals } from './filetree.ts';
+import type { PruneResult } from './prune.ts';
 import type { PageSettings } from './settings.ts';
 
 /** A repository's `.pruneignore`, as found on its default branch. */
@@ -50,6 +51,12 @@ export interface Lookup {
   capped: boolean;
   /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */
   repo: RepoConfig | null;
+  /**
+   * The stored result, if computed with the current rules. Its list may be
+   * out of date, so it only hides diffs until GitHub has answered (then it is
+   * the result if the ETag still matches).
+   */
+  result: PruneResult | null;
 }
 
 /** Reply to `get-status`, sent from the content script to the popup. */

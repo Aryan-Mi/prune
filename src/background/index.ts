@@ -82,22 +82,35 @@ function refreshOnce(force = false): Promise<RemoteCache | null> {
 /**
  * Everything a PR page needs before GitHub has answered: settings, the tab's
  * switched-off PRs, and what's stored for this PR so the content script can
- * skip fetching or sending it.
+ * skip fetching or sending it, and hide the pruned files before the page has
+ * rendered them (see Lookup.result).
  */
 async function lookup(msg: Extract<Message, { type: 'lookup' }>, sender: browser.runtime.MessageSender): Promise<Lookup> {
   const partition = cachePartition(sender);
-  const [inactive, settings, entry, repo] = await Promise.all([
+  const key = partition === null ? null : partition + msg.key;
+  const [inactive, settings, entry, repo, remote] = await Promise.all([
     openTab(sender.tab?.id),
     loadSettings(),
-    partition === null ? null : stored(partition + msg.key),
+    key === null ? null : stored(key),
     partition === null ? null : storedRepoConfig(partition + msg.repoKey),
+    loadRemoteCache(),
   ]);
+  const none = { path: null, text: null };
+  let result: PruneResult | null = null;
+  // The repository's rules file as last seen, even if it's due to be fetched
+  // again: the result only hides diffs until the fresh one is in.
+  const rulesRepo = settings.useRepoConfig ? repo && { path: repo.path, text: repo.text } : none;
+  if (key !== null && entry && rulesRepo) {
+    const remoteText = remote?.url === settings.remoteUrl ? remote.text : null;
+    result = await loadResult(key, entry.etag, await rulesFingerprint(rulesKey(settings), rulesRepo, remoteText));
+  }
   return {
     settings: pageSettings(settings),
     inactive,
     etag: entry?.etag ?? null,
     capped: !!entry?.capped,
-    repo: settings.useRepoConfig ? repo : { path: null, text: null },
+    repo: !settings.useRepoConfig ? none : repo?.fresh ? { path: repo.path, text: repo.text } : null,
+    result,
   };
 }
 

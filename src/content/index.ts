@@ -42,6 +42,8 @@ interface PrResponses {
   fileTree: Response;
   /** ETag of the file list the background script has a result for. */
   storedEtag: string | null;
+  /** That result, if it was computed with the current rules. */
+  stored: PruneResult | null;
   /** GitHub's totals, requested along with the list if it may well be capped (see isCapped()). */
   totals: Promise<Partial<PrTotals> | null>;
   repo: RepoConfig;
@@ -64,6 +66,12 @@ class Controller implements UiActions {
   private status: ViewStatus = 'loading';
   private error: string | undefined;
   private data: PrData | null = null;
+  /**
+   * The background script's result from an earlier visit while this PR's is
+   * loading: it hides the pruned diffs before GitHub renders them, when
+   * that's nearly free (see PruneStyles).
+   */
+  private early: { key: string; result: PruneResult } | null = null;
 
   private readonly prCache = new Map<string, CacheEntry<PrData>>();
   /** Responses fetched while settings were still loading. */
@@ -356,6 +364,7 @@ class Controller implements UiActions {
       .then((data) => {
         if (token !== this.loadToken) return;
         this.data = data;
+        this.early = null;
         this.status = 'ready';
         this.error = undefined;
         this.revealFromHash();
@@ -385,7 +394,8 @@ class Controller implements UiActions {
       const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
         const res = responses.fileTree;
         const etag = res.headers.get('ETag');
-        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
+        let result =
+          etag && etag === responses.storedEtag ? (responses.stored ?? (await prune(pr, responses, null, etag))) : null;
         if (result) discard(res);
         // Not stored (any more): send the list over.
         else result = await prune(pr, responses, await res.text(), etag);
@@ -409,6 +419,7 @@ class Controller implements UiActions {
         etag: null,
         capped: false,
         repo: null,
+        result: null,
       }),
     );
   }
@@ -416,6 +427,11 @@ class Controller implements UiActions {
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
   private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
     const fileTree = fetchFileTree(pr);
+    const stored = lookup.then(({ result }) => {
+      const shared = result && shareStrings(result);
+      if (shared) this.preview(pr.key, shared);
+      return shared;
+    });
     const totals = Promise.all([fileTree, lookup])
       .then(([res, { capped }]) => (capped || mayBeCapped(res) ? fetchPrTotals(pr) : null))
       .catch(() => null);
@@ -423,13 +439,21 @@ class Controller implements UiActions {
       fileTree,
       lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
       lookup,
-    ]).then(([fileTree, repo, stored]) => ({
+      stored,
+    ]).then(([fileTree, repo, { etag, repo: storedRepo }, stored]) => ({
       fileTree,
-      storedEtag: stored.etag,
+      storedEtag: etag,
+      stored,
       totals,
       repo,
-      repoFetched: !stored.repo,
+      repoFetched: !storedRepo,
     }));
+  }
+
+  /** Applies a result from an earlier visit to `key` while its own is loading. */
+  private preview(key: string, result: PruneResult): void {
+    this.early = { key, result };
+    if (this.configured && this.pr?.key === key && this.status === 'loading') this.render();
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -502,6 +526,13 @@ class Controller implements UiActions {
       } else {
         this.collapser?.restore();
       }
+    } else if (this.status === 'loading' && this.isActive() && this.early?.key === this.pr.key) {
+      // Not GitHub's answer yet: only the diffs are hidden.
+      this.styles.update(this.pr.isDiffView ? this.early.result : null, {
+        diffMode: this.settings.diffMode,
+        treeMode: this.settings.treeMode,
+        revealed: this.revealedSet(),
+      });
     } else {
       // Switched off (or refreshing): the same rules may apply again in a moment.
       this.styles.off();
@@ -630,6 +661,7 @@ class Controller implements UiActions {
     this.section = null;
     this.sectionContainer = null;
     this.data = null;
+    this.early = null;
     this.prefetched = null;
     this.status = 'loading';
     this.error = undefined;

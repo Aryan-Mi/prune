@@ -37,7 +37,8 @@ let onChanged: (changes: Record<string, { oldValue?: unknown; newValue?: unknown
     },
   },
 };
-const { cachePartition, loadResult, rulesFingerprint, saveResult, stored } = await import('../src/background/cache.ts');
+const { cachePartition, loadResult, REPO_CONFIG_TTL_MS, rulesFingerprint, saveRepoConfig, saveResult, stored, storedRepoConfig } =
+  await import('../src/background/cache.ts');
 const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
 const { computePrune } = await import('../src/shared/prune.ts');
 const { compileRules } = await import('../src/shared/rules.ts');
@@ -84,6 +85,19 @@ test('the rules fingerprint changes with every input', async () => {
   expect(await rulesFingerprint('key', { ...repo, text: 'b/' }, null)).not.toBe(base);
   expect(await rulesFingerprint('key', { ...repo, path: '.github/pruneignore' }, null)).not.toBe(base);
   expect(await rulesFingerprint('key', repo, '')).not.toBe(base);
+});
+
+test('a repository rules file is kept past its reuse, for fingerprinting stored results', async () => {
+  const now = Date.now;
+  try {
+    await saveRepoConfig('|a/b', { path: '.pruneignore', text: 'a/' });
+    expect(await storedRepoConfig('|a/b')).toEqual({ path: '.pruneignore', text: 'a/', fresh: true });
+    Date.now = () => now() + REPO_CONFIG_TTL_MS;
+    expect(await storedRepoConfig('|a/b')).toEqual({ path: '.pruneignore', text: 'a/', fresh: false });
+    expect(await storedRepoConfig('|c/d')).toBeNull();
+  } finally {
+    Date.now = now;
+  }
 });
 
 test('cache keys are per container, and private windows get none', () => {

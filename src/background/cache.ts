@@ -15,7 +15,8 @@ import { isCapped } from '../shared/totals.ts';
  * revisited PR's 700 KB response is never read in the page, passed along or
  * parsed (and the browser's HTTP cache has usually saved downloading it
  * again). A stored result is only ever used after GitHub answered a request
- * for it with the tab's cookies, so access is still checked.
+ * for it with the tab's cookies, so access is still checked; before that it
+ * only hides diffs in the page GitHub served for the PR (see Lookup.result).
  *
  * Only results are kept, not file lists: they hold just the pruned files, so
  * they're a fraction of the size. When the rules change, the list is sent or
@@ -145,10 +146,13 @@ async function readRepoConfigs(): Promise<RepoConfigs> {
   return (stored[REPO_CONFIGS_KEY] as RepoConfigs | undefined) ?? {};
 }
 
-/** A recently fetched .pruneignore for the repository `key`, so tabs don't each fetch it. */
-export async function storedRepoConfig(key: string): Promise<RepoConfig | null> {
+/**
+ * The .pruneignore last fetched for the repository `key`. A `fresh` one is
+ * reused, so tabs don't each fetch it.
+ */
+export async function storedRepoConfig(key: string): Promise<(RepoConfig & { fresh: boolean }) | null> {
   const entry = (await readRepoConfigs())[key];
-  return entry && Date.now() - entry.fetchedAt < REPO_CONFIG_TTL_MS ? { path: entry.path, text: entry.text } : null;
+  return entry ? { path: entry.path, text: entry.text, fresh: Date.now() - entry.fetchedAt < REPO_CONFIG_TTL_MS } : null;
 }
 
 export function saveRepoConfig(key: string, config: RepoConfig): Promise<void> {

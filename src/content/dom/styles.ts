@@ -16,9 +16,13 @@ import type { PruneResult } from '../../shared/prune.ts';
  * Id selectors, not [id="…"], so the style engine can look rules up by id.
  *
  * The sheet is written once per PR and settings, never for a click: in
- * Chromium, any change to a document's stylesheets restyles the whole
- * document (~1 s on a 3,000-file diff), while an attribute change only
- * restyles the elements it affects. So a file shown again from the "Pruned
+ * Chromium, any change to a GitHub page's stylesheets restyles nearly the
+ * whole document (~1 s on a 3,000-file diff: GitHub links one sheet with
+ * cascade layers several times, and then Chromium re-matches all of its
+ * rules), while an attribute change only restyles the elements it affects.
+ * That's also why a PR seen before gets the sheet as soon as the background
+ * script answers, from its stored result: while GitHub's HTML is still being
+ * parsed, the restyle is one GitHub's own sheets cause anyway. So a file shown again from the "Pruned
  * files" section gets a `data-prune-show` attribute (its rules end in
  * `:not([data-prune-show])`), and in Chromium every rule starts with
  * `html[data-prune-on]`, an attribute that switches them all off and on
