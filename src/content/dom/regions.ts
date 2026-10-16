@@ -42,14 +42,14 @@ export class BulkRegions {
   }
 }
 
-/** Some file diff on the page: by id when possible, else the first one in the document. */
+/**
+ * Some file diff on the page: by id when possible, else the first one in the
+ * document. (Looking up the pruned files' ids too would only cost more while
+ * the diffs haven't rendered yet: the search below finds any.)
+ */
 function firstDiff(result: PruneResult): Element | null {
   for (const digest of result.probes) {
     const diff = document.getElementById(`diff-${digest}`);
-    if (diff) return diff;
-  }
-  for (const file of result.pruned) {
-    const diff = document.getElementById(`diff-${file.digest}`);
     if (diff) return diff;
   }
   // Other `diff-` ids (like a wrapper's) come before the diffs they contain.

@@ -102,6 +102,11 @@ export class CountPatcher {
     return places;
   }
 
+  /** The "Files changed" links whose counter was found. */
+  filesLinks(): Element[] {
+    return this.holders.filter((el) => el.localName === 'a' && el.isConnected);
+  }
+
   /** The patched nodes (text nodes, elements with a patched attribute). */
   patched(): Node[] {
     return [...this.texts.map((p) => p.node), ...this.attrs.map((p) => p.el)];

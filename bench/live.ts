@@ -23,11 +23,12 @@
  * style and layout work in the second after the click counts.
  *
  *   bun run build:chrome && node bench/live.ts [--runs=5] [--json=out.json]
- *     [--only=<scenario regex>] [--breakdown] [--extension=dist/chrome] [--no-style] [--explain]
+ *     [--only=<scenario regex>] [--breakdown] [--top=25] [--tasks] [--extension=dist/chrome]
+ *     [--no-style] [--explain]
  *
  * --breakdown prints where the time went (per content script function, self time
  * including native/GC work it triggered, averaged over runs) and where the
- * live heap was allocated. --no-style skips the traced loads; --explain
+ * live heap was allocated (the --top entries of each). --tasks lists each run's tasks. --no-style skips the traced loads; --explain
  * lists every recalc PRune had a part in, and what PRune invalidated.
  */
 import { writeFile } from 'node:fs/promises';
@@ -45,6 +46,10 @@ const ONLY = new RegExp(arg('only', ''), 'i');
 const BREAKDOWN = process.argv.includes('--breakdown');
 const STYLE = !process.argv.includes('--no-style');
 const EXPLAIN = process.argv.includes('--explain');
+// How many functions and allocation sites --breakdown lists.
+const TOP = Number(arg('top', '25'));
+// Lists every content script task of each run: when it started, how long it took, and its main functions.
+const TASKS = process.argv.includes('--tasks');
 
 interface Scenario {
   name: string;
@@ -152,6 +157,10 @@ function contentScriptTasks(
   let runFunctions = new Map<string, number>();
   const endRun = () => {
     const ms = (runEnd - runStart) / 1000;
+    if (TASKS) {
+      const top = [...runFunctions].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k]) => k);
+      console.log(`      ${((runStart - profile.startTime) / 1000).toFixed(0).padStart(6)} ms  ${ms.toFixed(2).padStart(5)} ms  ${top.join(', ')}`);
+    }
     if (ms > Math.max(0, ...tasks)) {
       longest.clear();
       for (const [k, v] of runFunctions) longest.set(k, v);
@@ -446,6 +455,7 @@ async function measure(page: Page, cdp: CDPSession, scenario: Scenario, sites: M
   const functions = new Map<string, number>();
   const natives = new Map<string, number>();
   const longest = new Map<string, number>();
+  if (TASKS) console.log(`    ${scenario.name}: tasks (start, duration, main functions)`);
   const tasks = contentScriptTasks(cpu, functions, natives, longest);
   const pill = await page.evaluate(
     () => document.querySelector('[data-prune-ui="indicator"]')?.shadowRoot?.querySelector('.label')?.textContent ?? '',
@@ -593,7 +603,7 @@ for (const [name, samples] of Object.entries(results)) {
     for (const key of ['functions', 'natives'] as const) {
       const sum = new Map<string, number>();
       for (const sample of samples) for (const [k, v] of sample[key]) sum.set(k, (sum.get(k) ?? 0) + v / samples.length);
-      const top = [...sum].sort((a, b) => b[1] - a[1]).slice(0, 25);
+      const top = [...sum].sort((a, b) => b[1] - a[1]).slice(0, TOP);
       console.log(`    ${key} (mean ms per run):`);
       for (const [k, v] of top) console.log(`      ${v.toFixed(2).padStart(7)}  ${k}`);
     }
@@ -614,7 +624,7 @@ if (JSON_OUT) await writeFile(JSON_OUT, JSON.stringify(summary, null, 2));
 if (BREAKDOWN) {
   for (const [name, sites] of Object.entries(allocationSites)) {
     console.log(`\n${name}: live heap by allocation site (KB, mean over runs)`);
-    for (const [site, bytes] of [...sites].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+    for (const [site, bytes] of [...sites].sort((a, b) => b[1] - a[1]).slice(0, TOP)) {
       console.log(`  ${(bytes / 1024 / RUNS).toFixed(1).padStart(7)}  ${site}`);
     }
   }

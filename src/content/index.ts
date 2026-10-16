@@ -3,7 +3,6 @@ import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
 import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
-import { applyTotals, isCapped } from '../shared/totals.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
@@ -14,6 +13,9 @@ import { Indicator } from './ui/indicator.ts';
 import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
 import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
+
+// Times are Date.now(): precise enough for these, and performance.now() would
+// have the page set up the Performance interface in this script's world.
 
 /** A PR's result is reused across tab switches for this long before refetching. */
 const PR_DATA_TTL_MS = 60_000;
@@ -32,28 +34,33 @@ const GIVE_UP_MS = 2000;
 interface PrData {
   /** The PR this data belongs to. */
   key: string;
+  /** A summary unless the page wanted the pruned files (see `wantsFiles()`). */
   result: PruneResult;
+  /** ETag of the file list `result` is for. */
+  etag: string | null;
   repoConfigPath: string | null;
 }
 
-/** GitHub's responses for a PR, on their way to the background script. */
+/** GitHub's responses for a PR, and what the background script has for it. */
 interface PrResponses {
   /** The file_tree response, body unread. */
   fileTree: Response;
-  /** ETag of the file list the background script has a result for. */
-  storedEtag: string | null;
-  /** GitHub's totals, requested along with the list if it may well be capped (see isCapped()). */
-  totals: Promise<Partial<PrTotals> | null>;
+  stored: Lookup;
   repo: RepoConfig;
   repoFetched: boolean;
+  /** Asked for the pruned files (see Lookup). */
+  files: boolean;
 }
 
-interface CacheEntry<T> {
-  promise: Promise<T>;
+interface CacheEntry {
+  promise: Promise<PrData>;
+  /** When GitHub's list was fetched. */
   at: number;
+  /** With the pruned files. */
+  files: boolean;
 }
 
-class Controller implements UiActions {
+class Controller implements UiActions, EventListenerObject {
   /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
   private settings!: PageSettings;
   private configured = false;
@@ -65,9 +72,13 @@ class Controller implements UiActions {
   private error: string | undefined;
   private data: PrData | null = null;
 
-  private readonly prCache = new Map<string, CacheEntry<PrData>>();
+  private readonly prCache = new Map<string, CacheEntry>();
   /** Responses fetched while settings were still loading. */
-  private prefetched: { key: string; promise: Promise<PrResponses> } | null = null;
+  private prefetched: { key: string; files: boolean; promise: Promise<PrResponses> } | null = null;
+  /** The PR whose pruned files the ✂ popover or its diffs are about to show. */
+  private filesFor = '';
+  /** "Files changed" links that ask for the pruned files once the pointer reaches them. */
+  private readonly armed = new WeakSet<Element>();
   private readonly revealed = new Map<string, Set<string>>();
   /** PRs switched off in this tab; the background script keeps them across page loads. */
   private readonly inactive = new Set<string>();
@@ -230,7 +241,7 @@ class Controller implements UiActions {
   /** How much longer what is missing from the header landmarks is expected to render there (see GIVE_UP_MS). */
   private waitFor(): number {
     if (document.readyState !== 'complete') return GIVE_UP_MS;
-    return Math.max(0, this.shownAt + GIVE_UP_MS - performance.now());
+    return Math.max(0, this.shownAt + GIVE_UP_MS - Date.now());
   }
 
   private onMutations(records: MutationRecord[]): void {
@@ -255,7 +266,7 @@ class Controller implements UiActions {
     // Until the check runs, further mutations would change nothing, so don't
     // have the browser record them (a big PR page makes thousands).
     this.observer.disconnect();
-    const wait = Math.max(0, CHECK_INTERVAL_MS - (performance.now() - this.lastCheck));
+    const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - this.lastCheck));
     this.checkTimer = window.setTimeout(() => {
       this.checkTimer = 0;
       this.check();
@@ -268,7 +279,7 @@ class Controller implements UiActions {
    * pieces), one trailing retry is queued so the last mutation is never missed.
    */
   private check(fromMutation = true): void {
-    this.lastCheck = performance.now();
+    this.lastCheck = Date.now();
     // PRune's own changes needn't be observed; track() picks up from here.
     this.observer.disconnect();
     this.checking = true;
@@ -290,7 +301,7 @@ class Controller implements UiActions {
     if (this.isPruning()) {
       const intact = this.counts.isIntact();
       if (!intact || !this.counts.isComplete()) {
-        const since = performance.now() - this.lastRescan;
+        const since = Date.now() - this.lastRescan;
         // apply() searches the whole page only if the likely places come up short.
         if (!intact || since >= INCOMPLETE_RESCAN_MS) this.applyCounts();
         else if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
@@ -308,22 +319,23 @@ class Controller implements UiActions {
   private onLocationChange(pr: PrRef | null): void {
     if (pr && !this.configured) {
       // GitHub's responses don't depend on settings: fetch them while they load.
-      const lookup = this.lookup(pr);
-      this.prefetched = { key: pr.key, promise: this.fetchPr(pr, lookup) };
+      const files = this.wantsFiles(pr);
+      const lookup = this.lookup(pr, files);
+      this.prefetched = { key: pr.key, files, promise: this.fetchPr(pr, files, lookup) };
       this.prefetched.promise.catch(() => {});
       this.configure(lookup);
       return;
     }
     const prev = this.pr;
     this.pr = pr;
-    this.shownAt = performance.now();
+    this.shownAt = Date.now();
     if (!pr) {
       this.teardown();
       this.release();
       return;
     }
     // Counters found where expected are enough at first; the whole-page search for more can wait.
-    this.lastRescan = performance.now();
+    this.lastRescan = Date.now();
     if (prev?.key !== pr.key) {
       this.teardown();
       this.sectionContainer = null;
@@ -334,8 +346,9 @@ class Controller implements UiActions {
       this.counts.rescope();
       this.sectionContainer = null;
       this.regions.reset();
+      // Or to get the pruned files, now that there are diffs.
       const cached = this.prCache.get(pr.key);
-      if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS) this.load(pr);
+      if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS || (!cached.files && this.wantsFiles(pr))) this.load(pr);
       this.revealFromHash();
       this.render();
     }
@@ -352,12 +365,14 @@ class Controller implements UiActions {
     }
     this.render();
 
-    this.prData(pr)
+    this.prData(pr, this.wantsFiles(pr))
       .then((data) => {
         if (token !== this.loadToken) return;
         this.data = data;
         this.status = 'ready';
         this.error = undefined;
+        // The popover was hovered meanwhile.
+        if (data.result.partial && this.wantsFiles(pr)) this.load(pr);
         this.revealFromHash();
         this.render();
       })
@@ -375,61 +390,80 @@ class Controller implements UiActions {
    * 700 KB JSON response; the page never parses it or keeps any of it, and
    * gets back only the pruned files. If the background script already has a
    * result for this exact list (from an earlier visit; GitHub's ETag says so),
-   * the response isn't even read, let alone passed along.
+   * the response isn't even read, let alone passed along: the result usually
+   * came with the reply to `lookup` already.
+   *
+   * With `files`, the result has the pruned files; else it is a summary.
    */
-  private prData(pr: PrRef): Promise<PrData> {
-    let entry = this.prCache.get(pr.key);
-    if (!entry || Date.now() - entry.at > PR_DATA_TTL_MS) {
-      const prefetched = this.prefetched?.key === pr.key ? this.prefetched.promise : null;
-      this.prefetched = null;
-      const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
-        const res = responses.fileTree;
-        const etag = res.headers.get('ETag');
-        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
-        if (result) discard(res);
-        // Not stored (any more): send the list over.
-        else result = await prune(pr, responses, await res.text(), etag);
-        if (!result) throw new Error('Could not prune this pull request');
-        if (isCapped(result)) result = applyTotals(result, (await responses.totals) ?? (await fetchPrTotals(pr)));
-        return { key: pr.key, result, repoConfigPath: responses.repo.path };
-      });
-      entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
-      promise.catch(() => this.prCache.delete(pr.key));
+  private prData(pr: PrRef, files: boolean): Promise<PrData> {
+    const entry = this.prCache.get(pr.key);
+    const fresh = !!entry && Date.now() - entry.at <= PR_DATA_TTL_MS;
+    if (fresh && (entry.files || !files)) return entry.promise;
+    const prefetched =
+      this.prefetched?.key === pr.key && (this.prefetched.files || !files) ? this.prefetched.promise : null;
+    this.prefetched = null;
+    const promise = fresh
+      ? entry.promise.then((data) => this.withFiles(pr, data))
+      : this.fromResponses(pr, prefetched ?? this.fetchPr(pr, files));
+    cache(this.prCache, pr.key, { promise, at: fresh ? entry.at : Date.now(), files });
+    promise.catch(() => this.prCache.delete(pr.key));
+    return promise;
+  }
+
+  private async fromResponses(pr: PrRef, pending: Promise<PrResponses>): Promise<PrData> {
+    const responses = await pending;
+    const { fileTree: res, stored } = responses;
+    const etag = res.headers.get('ETag');
+    let result =
+      etag && etag === stored.etag ? (stored.result ?? (await prune(pr, responses, null, etag, null))) : null;
+    if (result) {
+      discard(res);
+    } else {
+      // Not stored (any more): send the list over, with GitHub's totals if it may be capped.
+      const totals = mayBeCapped(res) ? fetchPrTotals(pr).catch(() => null) : null;
+      result = await prune(pr, responses, await res.text(), etag, await totals);
     }
-    return entry.promise;
+    if (!result) throw new Error('Could not prune this pull request');
+    return { key: pr.key, result: shareStrings(result), etag, repoConfigPath: responses.repo.path };
+  }
+
+  /**
+   * `data` with the pruned files, now that the page wants them: the
+   * background script still has them stored, unless GitHub's list changed.
+   */
+  private async withFiles(pr: PrRef, data: PrData): Promise<PrData> {
+    if (!data.result.partial) return data;
+    const { etag, result } = await this.lookup(pr, true);
+    if (result && etag === data.etag) return { ...data, result: shareStrings(result) };
+    return this.fromResponses(pr, this.fetchPr(pr, true));
+  }
+
+  /** Diffs show the pruned files (or hide them), and so does the ✂ popover. */
+  private wantsFiles(pr: PrRef): boolean {
+    return pr.isDiffView || this.filesFor === pr.key;
   }
 
   /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
-  private lookup(pr: PrRef): Promise<Lookup> {
-    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
+  private lookup(pr: PrRef, files: boolean): Promise<Lookup> {
+    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey, files }).catch(
       async (): Promise<Lookup> => ({
         // Not reachable right now: fetch everything, and read settings here.
         settings: this.configured ? this.settings : pageSettings(await loadSettings()),
         inactive: [],
         etag: null,
-        capped: false,
         repo: null,
+        result: null,
       }),
     );
   }
 
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
-  private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
-    const fileTree = fetchFileTree(pr);
-    const totals = Promise.all([fileTree, lookup])
-      .then(([res, { capped }]) => (capped || mayBeCapped(res) ? fetchPrTotals(pr) : null))
-      .catch(() => null);
+  private fetchPr(pr: PrRef, files: boolean, lookup = this.lookup(pr, files)): Promise<PrResponses> {
     return Promise.all([
-      fileTree,
-      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+      fetchFileTree(pr),
       lookup,
-    ]).then(([fileTree, repo, stored]) => ({
-      fileTree,
-      storedEtag: stored.etag,
-      totals,
-      repo,
-      repoFetched: !stored.repo,
-    }));
+      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+    ]).then(([fileTree, stored, repo]) => ({ fileTree, stored, repo, repoFetched: !stored.repo, files }));
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -447,7 +481,7 @@ class Controller implements UiActions {
   }
 
   private isPruning(): boolean {
-    return this.isActive() && this.status === 'ready' && (this.result?.pruned.length ?? 0) > 0;
+    return this.isActive() && this.status === 'ready' && (this.result?.removed.files ?? 0) > 0;
   }
 
   private revealedSet(): Set<string> {
@@ -535,7 +569,7 @@ class Controller implements UiActions {
     const { original, kept } = this.result;
     const wait = this.waitFor();
     if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false, wait > 0)) {
-      this.lastRescan = performance.now();
+      this.lastRescan = Date.now();
     }
     this.searchAfterWait(!this.counts.isComplete(), wait);
   }
@@ -548,7 +582,8 @@ class Controller implements UiActions {
 
   private wantsSection(): boolean {
     // Single-commit views only show some files, so a whole-PR list would mislead.
-    return !!this.pr?.isFilesTab && this.settings.diffMode === 'hide' && this.isPruning();
+    // A summary has no files to list: they are on their way.
+    return !!this.pr?.isFilesTab && this.settings.diffMode === 'hide' && this.isPruning() && !this.result?.partial;
   }
 
   private mountUi(fromMutation = false): void {
@@ -567,6 +602,22 @@ class Controller implements UiActions {
     if (anchor || this.status !== 'loading') indicator.mount(anchor);
     else indicator.unmount();
     this.placeSection(this.watching, fromMutation);
+    // A summary: the diffs will want the pruned files, so they're asked for
+    // when the pointer reaches the "Files changed" tab (or it gets focus),
+    // before the diffs render.
+    if (this.result?.partial) {
+      for (const link of this.counts.filesLinks()) {
+        if (this.armed.has(link)) continue;
+        this.armed.add(link);
+        link.addEventListener('pointerenter', this, { once: true });
+        link.addEventListener('focus', this, { once: true });
+      }
+    }
+  }
+
+  /** A "Files changed" link was reached (see `mountUi()`). */
+  handleEvent(): void {
+    this.needFiles();
   }
 
   /**
@@ -591,9 +642,9 @@ class Controller implements UiActions {
 
   /** Rate-limits searches for page parts that may not have rendered yet (queues a retry instead). */
   private canLocate(fromMutation: boolean): boolean {
-    const since = performance.now() - this.lastLocate;
+    const since = Date.now() - this.lastLocate;
     if (since >= INCOMPLETE_RESCAN_MS) {
-      this.lastLocate = performance.now();
+      this.lastLocate = Date.now();
       return true;
     }
     if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
@@ -689,6 +740,13 @@ class Controller implements UiActions {
     sendMessage({ type: 'open-options' }).catch(() => {});
   }
 
+  needFiles(): void {
+    const pr = this.pr;
+    if (!pr || this.wantsFiles(pr)) return;
+    this.filesFor = pr.key;
+    if (this.result?.partial) this.load(pr);
+  }
+
   private tabStatus(): TabStatus {
     const pr = this.pr;
     const enabled = this.isEnabledHere();
@@ -698,7 +756,7 @@ class Controller implements UiActions {
       status: !pr ? 'idle' : !enabled ? 'disabled' : this.status,
       error: this.error,
       active: this.isActive(),
-      pruned: this.result?.pruned.length ?? 0,
+      pruned: this.result?.removed.files ?? 0,
       original: this.result?.original,
       kept: this.result?.kept,
       sources: this.result?.sources ?? [],
@@ -708,16 +766,17 @@ class Controller implements UiActions {
 }
 
 /**
- * Caches `promise` under `key`. Entries older than `ttl` are never read again,
- * so they are dropped then instead of keeping a PR's file list for good.
+ * Caches `entry` under `key`. Entries older than PR_DATA_TTL_MS are never read
+ * again, so they are dropped then instead of keeping a PR's result for good.
  */
-function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise<T>, ttl: number): CacheEntry<T> {
-  const entry = { promise, at: Date.now() };
+function cache(map: Map<string, CacheEntry>, key: string, entry: CacheEntry): void {
   map.set(key, entry);
-  setTimeout(() => {
-    if (map.get(key) === entry) map.delete(key);
-  }, ttl + 1000);
-  return entry;
+  setTimeout(
+    () => {
+      if (map.get(key) === entry) map.delete(key);
+    },
+    entry.at + PR_DATA_TTL_MS + 1000 - Date.now(),
+  );
 }
 
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
@@ -727,9 +786,10 @@ function findDiffstatFallback(): Element | null {
 
 function prune(
   pr: PrRef,
-  { repo, repoFetched }: PrResponses,
+  { repo, repoFetched, files }: PrResponses,
   fileTree: string | null,
   etag: string | null,
+  totals: Partial<PrTotals> | null,
 ): Promise<PruneResult | null> {
   return sendMessage<PruneResult | null>({
     type: 'prune',
@@ -739,7 +799,9 @@ function prune(
     etag,
     repo,
     repoFetched,
-  }).then((result) => result && shareStrings(result));
+    totals,
+    files,
+  });
 }
 
 /**

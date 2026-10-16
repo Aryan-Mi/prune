@@ -27,18 +27,21 @@ export const BASE_CSS = /* css */ `
 }
 * { box-sizing: border-box; }
 button { font: inherit; color: inherit; }
-.icon { width: 16px; height: 16px; flex: none; fill: currentColor; }
-.icon-stroke { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .btn:focus-visible, .pill:focus-visible, .row:focus-visible, .switch:focus-visible {
   outline: 2px solid var(--focus-outlineColor, var(--p-accent)); outline-offset: -2px;
 }
 `;
 
 /**
- * File rows (path, line stats) and buttons, shared by the popover and the
- * section. Kept apart from BASE_CSS so the pill alone doesn't parse them.
+ * Icons (see icon()), file rows (path, line stats) and buttons, shared by
+ * the popover and the section. Kept apart from BASE_CSS so the pill alone
+ * doesn't parse them.
  */
 export const LIST_CSS = /* css */ `
+/* High-contrast modes would paint the background (the icon) in the background color. */
+.icon { display: inline-block; width: 16px; height: 16px; flex: none; background: currentColor; mask: var(--icon) center / contain no-repeat; forced-color-adjust: none; }
+@media (forced-colors: active) { .icon { background: CanvasText; } }
+.icon-scissors { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M6 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM5.6 5.2 14 12.5M5.6 10.8 14 3.5'/></svg>"); }
 .add { color: var(--p-success); font-weight: 600; }
 .del { color: var(--p-danger); font-weight: 600; }
 .stat { font-family: var(--p-mono); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -53,28 +56,6 @@ export const LIST_CSS = /* css */ `
 }
 .btn:hover { background: var(--button-default-bgColor-hover, var(--p-hover)); }
 `;
-
-/** An icon: the class of its 16×16 `<svg>` and the data of its single `<path>`. */
-export interface Icon {
-  className: string;
-  d: string;
-}
-
-export const ICON_SCISSORS: Icon = {
-  className: 'icon icon-stroke',
-  // Two r=2 circles (at 4,4 and 4,12), then the blades.
-  d: 'M6 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM5.6 5.2 14 12.5M5.6 10.8 14 3.5',
-};
-
-export const ICON_GEAR: Icon = {
-  className: 'icon',
-  d: 'M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.363-1.891l.815-.806c.05-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.815-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.217c.428-.61 1.176-.807 1.82-.63l1.102.302c.067.019.177.011.3-.071.214-.143.437-.272.668-.386.133-.066.194-.158.211-.224l.29-1.106C6.009.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.029.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z',
-};
-
-export const ICON_CHEVRON: Icon = {
-  className: 'icon chevron',
-  d: 'M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z',
-};
 
 /** Renders a path as "dir/" (muted) + "name", ellipsized from the left. */
 export function pathElement(path: string): HTMLElement {
@@ -118,18 +99,15 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-/** Builds one of the ICON_* above directly: no markup to parse, nothing cached. */
-export function icon({ className, d }: Icon): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('class', className);
-  svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('aria-hidden', 'true');
-  const path = document.createElementNS(SVG_NS, 'path');
-  path.setAttribute('d', d);
-  svg.append(path);
-  return svg;
+/**
+ * One of the icons the stylesheets draw (a mask over the text color: LIST_CSS
+ * has the scissors, the popover's and the section's their own): no SVG
+ * elements, whose DOM interfaces would cost ~10 KB in this script's world.
+ */
+export function icon(name: 'scissors' | 'gear' | 'chevron', className = ''): HTMLSpanElement {
+  const span = el('span', `icon icon-${name}${className ? ` ${className}` : ''}`);
+  span.setAttribute('aria-hidden', 'true');
+  return span;
 }
 
 export function styleElement(css: string): HTMLStyleElement {

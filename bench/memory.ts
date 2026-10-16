@@ -1,7 +1,8 @@
 /**
  * Offline, deterministic memory benchmark of what the content script keeps
  * for a PR: the pruned files the background script sends back (it parses and
- * prunes the file list) and the stylesheet built from them. Uses
+ * prunes the file list) and the stylesheet built from them; and on a page
+ * without diffs (the conversation tab), the summary it gets instead. Uses
  * a cached copy of nodejs/node#65161's `page_data/file_tree` (3000 files), so
  * it needs the network only once. Measures memory retained after GC (JS heap
  * plus typed-array backing stores, which live outside it), plus where
@@ -17,7 +18,7 @@ import { Session } from 'node:inspector/promises';
 import { join } from 'node:path';
 import { buildCss } from '../src/content/dom/styles.ts';
 import { fetchFileTree, parsePrUrl } from '../src/content/github.ts';
-import { prunePr } from '../src/shared/prune.ts';
+import { prunePr, summarize } from '../src/shared/prune.ts';
 import { DEFAULT_SETTINGS } from '../src/shared/settings.ts';
 
 const PR_URL = 'https://github.com/nodejs/node/pull/65161';
@@ -71,11 +72,12 @@ function sites(node: HeapNode, out: Map<string, number>, caller = ''): Map<strin
 
 const settings = { ...DEFAULT_SETTINGS };
 
-/** What the controller holds on to while the PR is open. */
-async function load() {
+/** What the controller holds on to while the PR is open; `summary` on a page without diffs. */
+async function load(summary = false) {
   const fileTree = await (await fetchFileTree(parsePrUrl('/nodejs/node/pull/65161')!)).text();
   // The background script's work; the reply arrives as a copy.
-  const result = structuredClone(prunePr(fileTree, {}, settings, {}));
+  const pruned = prunePr(fileTree, {}, settings, {});
+  const result = structuredClone(summary ? summarize(pruned) : pruned);
   // The stylesheet is built but, like in the content script, not kept.
   const cssLength = buildCss(result, { diffMode: 'hide', treeMode: 'hide', gated: true }).length;
   return { result, cssLength };
@@ -83,6 +85,12 @@ async function load() {
 
 // Warm up first so code compilation and the rules cache aren't counted as data.
 await load();
+await load(true);
+const beforeSummary = usage();
+const summary = await load(true);
+const afterSummary = usage();
+const summaryBytes = afterSummary.heap - beforeSummary.heap + afterSummary.buffers - beforeSummary.buffers;
+void summary;
 const session = new Session();
 session.connect();
 await session.post('HeapProfiler.enable');
@@ -97,7 +105,8 @@ console.log(`${result.listed} files, ${result.pruned.length} pruned, stylesheet 
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 const heap = after.heap - before.heap;
 const buffers = after.buffers - before.buffers;
-console.log(`retained: ${kb(heap + buffers)} (JS heap ${kb(heap)} + array buffers ${kb(buffers)})\n`);
+console.log(`retained: ${kb(heap + buffers)} (JS heap ${kb(heap)} + array buffers ${kb(buffers)})`);
+console.log(`without diffs (a summary): ${kb(summaryBytes)}\n`);
 console.log('live heap by allocation site (KB):');
 for (const [site, bytes] of [...sites(profile.head, new Map())].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
   console.log(`  ${(bytes / 1024).toFixed(1).padStart(7)}  ${site}`);
