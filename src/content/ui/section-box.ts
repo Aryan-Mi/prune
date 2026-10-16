@@ -11,6 +11,7 @@ const CSS = /* css */ `
 .title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; }
 .title strong { font-size: 13px; font-weight: 600; }
 .title .mark { color: var(--p-done); }
+.icon-chevron { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z'/></svg>"); }
 .icon-chevron { color: var(--p-muted); transition: transform 160ms cubic-bezier(.2,.8,.2,1); transform: rotate(-90deg); }
 .box.open .icon-chevron { transform: none; }
 .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--p-done-bg); color: var(--p-done); font-size: 12px; font-weight: 500; line-height: 18px; text-align: center; }
