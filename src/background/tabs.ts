@@ -1,5 +1,6 @@
 import { ext } from '../shared/browser.ts';
 import type { Message } from '../shared/messages.ts';
+import { sendToTab } from '../shared/tabs.ts';
 
 /**
  * Tabs that have opened a PR, with the PRs switched off in each. Kept here
@@ -57,7 +58,7 @@ export function setInactive(tabId: number | undefined, keys: string[]): Promise<
 export async function notifyTabs(msg: Message): Promise<void> {
   const ids = Object.keys(await readTabs()).map(Number);
   const gone: number[] = [];
-  await Promise.all(ids.map((id) => ext.tabs.sendMessage(id, msg).catch(() => gone.push(id))));
+  await Promise.all(ids.map((id) => sendToTab(id, msg).catch(() => gone.push(id))));
   if (gone.length) {
     await update((all) => {
       for (const id of gone) delete all[id];

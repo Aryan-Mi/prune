@@ -1,9 +1,9 @@
-import { ext } from '../shared/browser.ts';
-import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
+import type { Lookup, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
+import { DEFAULT_SETTINGS, isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
 import { applyTotals, isCapped } from '../shared/totals.ts';
+import { onMessage, send } from './channel.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
@@ -54,9 +54,15 @@ interface CacheEntry<T> {
 }
 
 class Controller implements UiActions {
-  /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
-  private settings!: PageSettings;
+  /**
+   * Loaded on the first PR page, so the rest of GitHub doesn't pay for it,
+   * then with every PR: `disabledRepos` only has the repositories of PRs
+   * looked up since settings last changed (see `lookup()`).
+   */
+  private settings: PageSettings = pageSettings(DEFAULT_SETTINGS);
   private configured = false;
+  /** Counts settings changes, so that replies to earlier lookups don't undo them. */
+  private settingsVersion = 0;
   private configuring = false;
   private pr: PrRef | null = null;
   private href = '';
@@ -100,15 +106,16 @@ class Controller implements UiActions {
   private watching = false;
 
   start(): void {
-    ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
-      if (msg.type === 'get-status') {
-        sendResponse(this.tabStatus());
-      } else if (msg.type === 'set-active') {
-        this.setActive(msg.active);
-        sendResponse(this.tabStatus());
-      } else if (msg.type === 'config-changed') {
-        this.onConfigChanged(msg.settings, msg.rulesChanged);
-        sendResponse(null);
+    // From the popup and the background script (and, in Chromium, possibly the page: channel.ts).
+    onMessage((msg) => {
+      if (msg.type === 'get-status') return this.tabStatus();
+      if (msg.type === 'set-active') {
+        this.setActive(msg.active === true);
+        return this.tabStatus();
+      }
+      if (msg.type === 'config-changed') {
+        this.onConfigChanged();
+        return null;
       }
       return undefined;
     });
@@ -130,34 +137,35 @@ class Controller implements UiActions {
   }
 
   /**
-   * Takes the settings from the background script's reply to the first PR
-   * page's `lookup`, then handles the current page again. Changes are pushed
-   * from there too, so this script never reads extension storage.
+   * Waits for the background script's reply to the first PR page's `lookup`
+   * (which brings the settings), then handles the current page again. Changes
+   * are announced from there too, so this script never reads extension
+   * storage. If there was no reply, the next PR page tries again.
    */
   private configure(lookup: Promise<Lookup>): void {
     if (this.configuring) return;
     this.configuring = true;
     lookup
-      .then(({ settings, inactive }) => {
-        this.settings = settings;
+      .then(({ inactive }) => {
         for (const key of inactive) this.inactive.add(key);
         this.configured = true;
         this.href = '';
         this.check();
       })
-      .catch((err: unknown) => console.error('[PRune]', err));
+      .catch((err: unknown) => {
+        this.configuring = false;
+        console.error('[PRune]', err);
+      });
   }
 
-  private onConfigChanged(settings: PageSettings, rulesChanged: boolean): void {
+  /** Settings changed: looks up this PR again for them, and prunes it again in case the rules changed. */
+  private onConfigChanged(): void {
     if (!this.configured) return;
-    this.settings = settings;
-    if (rulesChanged) {
-      // Results are only kept for the pruned files, so prune again from scratch.
-      this.prCache.clear();
-      if (this.pr) this.load(this.pr);
-      return;
-    }
-    this.render();
+    this.settingsVersion++;
+    // Results are only kept for the pruned files. Other PRs' are dropped
+    // too, so that they are looked up again before they are shown.
+    this.prCache.clear();
+    if (this.pr) this.load(this.pr);
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -399,18 +407,46 @@ class Controller implements UiActions {
     return entry.promise;
   }
 
-  /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
+  /**
+   * Asks the background script for settings and what it has stored for `pr`;
+   * also wakes it up. The settings in the reply are taken as they are, except
+   * that it only tells whether PRune is off in `pr`'s repository.
+   */
   private lookup(pr: PrRef): Promise<Lookup> {
-    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
-      async (): Promise<Lookup> => ({
-        // Not reachable right now: fetch everything, and read settings here.
-        settings: this.configured ? this.settings : pageSettings(await loadSettings()),
-        inactive: [],
-        etag: null,
-        capped: false,
-        repo: null,
-      }),
+    const version = this.settingsVersion;
+    return send<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).then(
+      (reply) => {
+        if (version === this.settingsVersion) this.applySettings(pr, reply.settings);
+        return reply;
+      },
+      async (err: unknown): Promise<Lookup> => {
+        // Not reachable right now: fetch everything, with the settings at hand.
+        if (!this.configured) {
+          // Chromium: this script can't read them itself (world.d.ts).
+          if (PRUNE_MAIN_WORLD) throw err;
+          const settings = await loadSettings();
+          const disabledRepos = isRepoDisabled(settings, pr.repoKey) ? [pr.repoKey] : [];
+          this.applySettings(pr, { ...pageSettings(settings), disabledRepos });
+        }
+        return { settings: this.settings, inactive: [], etag: null, capped: false, repo: null };
+      },
     );
+  }
+
+  private applySettings(pr: PrRef, settings: PageSettings): void {
+    const prev = this.settings;
+    const disabled = settings.disabledRepos.includes(pr.repoKey);
+    const changed =
+      prev.enabled !== settings.enabled ||
+      prev.diffMode !== settings.diffMode ||
+      prev.treeMode !== settings.treeMode ||
+      isRepoDisabled(prev, pr.repoKey) !== disabled;
+    if (!changed) return;
+    const disabledRepos = prev.disabledRepos.filter((repo) => repo !== pr.repoKey);
+    if (disabled) disabledRepos.push(pr.repoKey);
+    this.settings = { ...settings, disabledRepos };
+    // Shown right away, before the PR is pruned again.
+    if (this.configured && this.pr?.key === pr.key) this.render();
   }
 
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
@@ -647,7 +683,7 @@ class Controller implements UiActions {
     if (!this.pr) return;
     if (active) this.inactive.delete(this.pr.key);
     else this.inactive.add(this.pr.key);
-    sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
+    send({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
   }
 
@@ -686,7 +722,7 @@ class Controller implements UiActions {
   }
 
   openSettings(): void {
-    sendMessage({ type: 'open-options' }).catch(() => {});
+    send({ type: 'open-options' }).catch(() => {});
   }
 
   private tabStatus(): TabStatus {
@@ -731,7 +767,7 @@ function prune(
   fileTree: string | null,
   etag: string | null,
 ): Promise<PruneResult | null> {
-  return sendMessage<PruneResult | null>({
+  return send<PruneResult | null>({
     type: 'prune',
     key: pr.key,
     repoKey: pr.repoKey,
@@ -764,13 +800,6 @@ function discard(res: Response): void {
   } catch {
     // Only frees the connection's buffers early; the response is dropped anyway.
   }
-}
-
-/** Messages the background script; it replies `{ error }` when something failed. */
-async function sendMessage<T = unknown>(msg: Message): Promise<T> {
-  const reply = (await ext.runtime.sendMessage(msg)) as T | { error: string } | undefined;
-  if (reply && typeof reply === 'object' && 'error' in reply) throw new Error(reply.error);
-  return reply as T;
 }
 
 function filesTabPath(pr: PrRef): string {

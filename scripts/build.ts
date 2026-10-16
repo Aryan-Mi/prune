@@ -51,35 +51,47 @@ function manifest(target: Target) {
     description: pkg.description,
     homepage_url: 'https://github.com/Aryan-Mi/prune',
     icons,
-    permissions: ['storage'],
+    // Chromium: `scripting` and github.com, to message the content scripts in
+    // the page's JS world (shared/tabs.ts). They run on github.com anyway, so
+    // this asks for nothing more.
+    permissions: target === 'chrome' ? ['storage', 'scripting'] : ['storage'],
+    ...(target === 'chrome' ? { host_permissions: ['https://github.com/*'] } : {}),
     // Only requested at runtime, for the optional remote rules file URL.
     optional_host_permissions: ['https://*/*'],
     // Everywhere else on GitHub only a tiny loader runs, which imports
-    // content.js if the tab soft-navigates to a PR.
+    // content.js if the tab soft-navigates to a PR. In Chromium both run in
+    // the page's own JS world: an isolated world would cost every GitHub tab
+    // ~170–250 KB more (src/world.d.ts).
     content_scripts: [
       {
         matches: ['https://github.com/*'],
         exclude_matches: [PR_MATCH],
         js: ['loader.js'],
         run_at: 'document_start',
+        ...(target === 'chrome' ? { world: 'MAIN' } : {}),
       },
       {
         matches: [PR_MATCH],
         js: ['content.js'],
         run_at: 'document_start',
+        ...(target === 'chrome' ? { world: 'MAIN' } : {}),
       },
     ],
     // For the loader's import() of content.js, and content.js's of its chunks.
-    // Chromium serves them from a per-session random URL only, so pages can't
-    // probe for the extension; Firefox's moz-extension:// URLs are random per
-    // install anyway.
+    // Firefox's moz-extension:// URLs are random per install, so pages can't
+    // probe for the extension. Chromium's per-session random URLs need
+    // `runtime.getURL()`, which the page's JS world doesn't have; github.com
+    // can tell PRune is there anyway, as it can message it.
     web_accessible_resources: [
       {
         resources: ['content.js', ...Object.keys(CONTENT_CHUNKS).map((name) => `${name}.js`)],
         matches: ['https://github.com/*'],
-        ...(target === 'chrome' ? { use_dynamic_url: true } : {}),
       },
     ],
+    // Chromium: how the content scripts in the page's JS world reach the
+    // background script. Only github.com pages, no other extension; their
+    // messages are handled as the page's (background/external.ts).
+    ...(target === 'chrome' ? { externally_connectable: { matches: ['https://github.com/*'] } } : {}),
     background: target === 'firefox' ? { scripts: ['background.js'] } : { service_worker: 'background.js' },
     action: {
       default_title: 'PRune',
@@ -170,6 +182,8 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     bundle: true,
     format: 'iife',
     target: target === 'firefox' ? ['firefox140'] : ['chrome120'],
+    // Where the content scripts run (src/world.d.ts).
+    define: { PRUNE_MAIN_WORLD: String(target === 'chrome') },
     legalComments: 'none',
     // Escape non-ASCII characters (\u2212 etc.): a single one makes the engine
     // keep the whole script source as UTF-16, doubling its memory.
@@ -182,9 +196,9 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     plugins: readable ? [] : [minifyCssTemplates],
     mangleProps: readable ? undefined : privateMembers(),
     define: {
+      ...common.define,
       // Chromium and Firefox restyle differently when stylesheets and attributes change (dom/styles.ts).
       PRUNE_ENGINE: target === 'chrome' ? '"blink"' : '"gecko"',
-      ...(target === 'chrome' ? { browser: 'chrome' } : {}),
     },
   };
   return [
@@ -204,7 +218,6 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
       ...common,
       entryPoints: { loader: join(root, 'src/content/loader.ts') },
       minify: !readable,
-      define: target === 'chrome' ? { browser: 'chrome' } : {},
     },
     // Readable output: easier to debug and to get through store review.
     {

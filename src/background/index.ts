@@ -5,6 +5,7 @@ import { parseRules } from '../shared/matcher.ts';
 import { computePrune, type PruneResult } from '../shared/prune.ts';
 import { compileRules } from '../shared/rules.ts';
 import {
+  isRepoDisabled,
   loadRemoteCache,
   loadSettings,
   onConfigChanged,
@@ -23,6 +24,7 @@ import {
   stored,
   storedRepoConfig,
 } from './cache.ts';
+import { isPageSender, pageMessage } from './external.ts';
 import { notifyTabs, openTab, setInactive } from './tabs.ts';
 
 /** Rules files larger than this are rejected; real ones are a few KB. */
@@ -93,7 +95,8 @@ async function lookup(msg: Extract<Message, { type: 'lookup' }>, sender: browser
     partition === null ? null : storedRepoConfig(partition + msg.repoKey),
   ]);
   return {
-    settings: pageSettings(settings),
+    // Which other repositories PRune is off for is none of this page's business (see external.ts).
+    settings: { ...pageSettings(settings), disabledRepos: isRepoDisabled(settings, msg.repoKey) ? [msg.repoKey] : [] },
     inactive,
     etag: entry?.etag ?? null,
     capped: !!entry?.capped,
@@ -129,28 +132,44 @@ async function prune(msg: Extract<Message, { type: 'prune' }>, partition: string
   return result;
 }
 
-// Respond via sendResponse + `return true`: works in Firefox and in every
-// Chromium version (returning a Promise is not supported everywhere).
-ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: unknown) => void) => {
-  let task: Promise<unknown> | undefined;
-  if (msg.type === 'open-options') task = ext.runtime.openOptionsPage();
-  else if (msg.type === 'refresh-remote') task = refreshOnce(msg.force);
-  else if (msg.type === 'lookup') task = lookup(msg, sender);
-  else if (msg.type === 'prune') task = prune(msg, cachePartition(sender));
-  else if (msg.type === 'set-inactive') task = setInactive(sender.tab?.id, msg.keys);
+function handle(msg: Message, sender: browser.runtime.MessageSender): Promise<unknown> | undefined {
+  if (msg.type === 'open-options') return ext.runtime.openOptionsPage();
+  if (msg.type === 'refresh-remote') return refreshOnce(msg.force);
+  if (msg.type === 'lookup') return lookup(msg, sender);
+  if (msg.type === 'prune') return prune(msg, cachePartition(sender));
+  if (msg.type === 'set-inactive') return setInactive(sender.tab?.id, msg.keys);
+  return undefined;
+}
+
+/**
+ * Respond via sendResponse + `return true`: works in Firefox and in every
+ * Chromium version (returning a Promise is not supported everywhere).
+ */
+function respond(task: Promise<unknown> | undefined, sendResponse: (value: unknown) => void): true | undefined {
   if (!task) return undefined;
   task.then(
     (value) => sendResponse(value ?? null),
     (err: unknown) => sendResponse({ error: String(err) }),
   );
   return true;
-});
+}
+
+// The extension's own pages, and Firefox's content scripts.
+ext.runtime.onMessage.addListener((msg: Message, sender, sendResponse: (value: unknown) => void) =>
+  respond(handle(msg, sender), sendResponse),
+);
+
+if (PRUNE_MAIN_WORLD) {
+  // Chromium's content scripts, which run in the page's JS world: answered as the page's (see external.ts).
+  ext.runtime.onMessageExternal.addListener((raw: unknown, sender, sendResponse: (value: unknown) => void) => {
+    const msg = isPageSender(sender) ? pageMessage(raw) : null;
+    return respond(msg ? handle(msg, sender) : undefined, sendResponse);
+  });
+}
 
 // Content scripts don't read settings themselves (see tabs.ts).
-onConfigChanged((rulesChanged) => {
-  loadSettings()
-    .then((settings) => notifyTabs({ type: 'config-changed', settings: pageSettings(settings), rulesChanged }))
-    .catch(() => {});
+onConfigChanged(() => {
+  notifyTabs({ type: 'config-changed' }).catch(() => {});
 });
 
 ext.runtime.onStartup.addListener(() => {
