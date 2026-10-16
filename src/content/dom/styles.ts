@@ -231,7 +231,8 @@ export class PruneStyles {
       this.off(false);
       return;
     }
-    this.leaveTimer = window.setTimeout(() => this.off(), LEAVE_MS);
+    // Diffs GitHub has taken away by then needn't settle.
+    this.leaveTimer = window.setTimeout(() => this.off(this.diffsShown()), LEAVE_MS);
   }
 
   /** Has the shown pruned diffs render fully, a group per frame, from the frame after next. */
