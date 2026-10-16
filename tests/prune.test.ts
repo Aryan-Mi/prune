@@ -163,6 +163,8 @@ describe('lazyCss', () => {
     expect(first).toContain(`#diff-${digest}:not(.js-file)`);
     expect(first).toContain('content-visibility: auto');
     expect(first).not.toContain('html[');
+    // A page known to be classic only gets the body's.
+    expect(lazyCss(r, false, true)[0]).not.toContain(':not(.js-file)');
   });
 
   test('groups of eight settle one by one, each behind its token in Chromium', () => {

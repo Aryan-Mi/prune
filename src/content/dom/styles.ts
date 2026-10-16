@@ -129,7 +129,7 @@ export class PruneStyles {
     // A sheet built for both UIs still does once the page turns out to be classic.
     const classic = isClassicUi() && (!same || built!.classic);
     if (!same || built!.diffMode !== diffMode || built!.treeMode !== treeMode || built!.classic !== classic) {
-      const lazy = diffMode === 'hide' ? lazyCss(result, GATED) : [];
+      const lazy = diffMode === 'hide' ? lazyCss(result, GATED, classic) : [];
       this.groups = lazy.length;
       this.tokens = lazyTokens(0, lazy.length);
       this.el ??= styleElement(STYLE_ID);
@@ -367,14 +367,15 @@ function lazyTokens(from: number, to: number): string {
 }
 
 /** Rules that render shown pruned diffs lazily, a group per settling step (see the top of this file). */
-export function lazyCss(result: PruneResult, gated = false): string[] {
+export function lazyCss(result: PruneResult, gated = false, classic = false): string[] {
   const groups: string[] = [];
   for (let i = 0; i < result.pruned.length; i += SETTLE_GROUP) {
     const gate = gated ? `html[${LAZY_ATTR}~="${groups.length}"] ` : '';
     const selectors: string[] = [];
     for (const { digest } of result.pruned.slice(i, i + SETTLE_GROUP)) {
       // Classic UI: the body; new UI: the whole diff (its menus are layers of their own).
-      selectors.push(`${gate}#diff-${digest} > .js-file-content`, `${gate}#diff-${digest}:not(.js-file)`);
+      selectors.push(`${gate}#diff-${digest} > .js-file-content`);
+      if (!classic) selectors.push(`${gate}#diff-${digest}:not(.js-file)`);
     }
     // Placeholder height of a diff not rendered yet (about the median).
     groups.push(`${selectors.join(',\n')} { content-visibility: auto; contain-intrinsic-size: auto 240px; }`);
