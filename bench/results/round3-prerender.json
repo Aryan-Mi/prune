@@ -1,0 +1,1651 @@
+{
+ "note": "Chromium, interleaved with the round 2 build in one session: live.ts 3 rounds × 3 runs (page loads; every measured load is a revisit), latency.ts 5 rounds × 1 run per variant. r2 = 045fbd1, r3 = pre-render.",
+ "r2": {
+  "huge PR · conversation": {
+   "samples": [
+    {
+     "totalMs": 2.683,
+     "maxTaskMs": 0.83,
+     "tasks": 6,
+     "heapKb": 84.23828125,
+     "styleMs": 0.11142468176201174,
+     "layoutMs": 0.11088129987183197,
+     "maxFrameMs": 0.15257463835026164
+    },
+    {
+     "totalMs": 3.26,
+     "maxTaskMs": 0.833,
+     "tasks": 8,
+     "heapKb": 100.65625,
+     "styleMs": 0.2507838486140725,
+     "layoutMs": 0.19859701492537313,
+     "maxFrameMs": 0.3844107142857143
+    },
+    {
+     "totalMs": 2.566,
+     "maxTaskMs": 1.014,
+     "tasks": 7,
+     "heapKb": 87.765625,
+     "styleMs": 0.5774390994493035,
+     "layoutMs": 0.13026773566569483,
+     "maxFrameMs": 0.5006666666666666
+    },
+    {
+     "totalMs": 2.0700000000000003,
+     "maxTaskMs": 0.843,
+     "tasks": 7,
+     "heapKb": 71.7890625,
+     "styleMs": 1.6457678571428571,
+     "layoutMs": 0.26735714285714285,
+     "maxFrameMs": 1.5185
+    },
+    {
+     "totalMs": 3.085,
+     "maxTaskMs": 0.835,
+     "tasks": 8,
+     "heapKb": 91.76953125,
+     "styleMs": 0.1449060093120404,
+     "layoutMs": 0.1057063274492455,
+     "maxFrameMs": 0.18295562034337542
+    },
+    {
+     "totalMs": 3.033,
+     "maxTaskMs": 0.937,
+     "tasks": 9,
+     "heapKb": 101.75,
+     "styleMs": 0.1355499051372868,
+     "layoutMs": 0.09841586619074527,
+     "maxFrameMs": 0.17154786088027088
+    },
+    {
+     "totalMs": 2.8040000000000003,
+     "maxTaskMs": 0.86,
+     "tasks": 8,
+     "heapKb": 93.61328125,
+     "styleMs": 0.1110173643227783,
+     "layoutMs": 0.07438320246131239,
+     "maxFrameMs": 0.14616527266644364
+    },
+    {
+     "totalMs": 2.938,
+     "maxTaskMs": 0.919,
+     "tasks": 8,
+     "heapKb": 98.26953125,
+     "styleMs": 1.4543302562332845,
+     "layoutMs": 0.36428355333160783,
+     "maxFrameMs": 1.5793333333333335
+    },
+    {
+     "totalMs": 2.856,
+     "maxTaskMs": 1.145,
+     "tasks": 8,
+     "heapKb": 89.12890625,
+     "styleMs": 0.15648459838804035,
+     "layoutMs": 0.11340665477278332,
+     "maxFrameMs": 0.19983155166828637
+    }
+   ]
+  },
+  "huge PR · files": {
+   "samples": [
+    {
+     "totalMs": 3.6370000000000005,
+     "maxTaskMs": 1.465,
+     "tasks": 5,
+     "heapKb": 89.96875,
+     "styleMs": 23.188722536169323,
+     "layoutMs": 3.5894198257593595,
+     "maxFrameMs": 24.45343268450933
+    },
+    {
+     "totalMs": 4.063,
+     "maxTaskMs": 1.671,
+     "tasks": 8,
+     "heapKb": 95.89453125,
+     "styleMs": 35.96309397062496,
+     "layoutMs": 9.409462191550702,
+     "maxFrameMs": 43.10171745249824
+    },
+    {
+     "totalMs": 1.358,
+     "maxTaskMs": 0.557,
+     "tasks": 4,
+     "heapKb": 79.89453125,
+     "styleMs": 24.234196957285153,
+     "layoutMs": 4.328870700121408,
+     "maxFrameMs": 28.470087818696882
+    },
+    {
+     "totalMs": 3.5300000000000002,
+     "maxTaskMs": 1.361,
+     "tasks": 8,
+     "heapKb": 88.10546875,
+     "styleMs": 22.06132013248848,
+     "layoutMs": 3.39936275921659,
+     "maxFrameMs": 23.197973214285714
+    },
+    {
+     "totalMs": 4.1259999999999994,
+     "maxTaskMs": 1.65,
+     "tasks": 5,
+     "heapKb": 84.72265625,
+     "styleMs": 990.644575598875,
+     "layoutMs": 3.286060188148579,
+     "maxFrameMs": 993.3860643584521
+    },
+    {
+     "totalMs": 3.5409999999999995,
+     "maxTaskMs": 1.422,
+     "tasks": 6,
+     "heapKb": 88.16015625,
+     "styleMs": 988.4102841074831,
+     "layoutMs": 3.4374587346429277,
+     "maxFrameMs": 989.6261299389002
+    },
+    {
+     "totalMs": 3.8879999999999995,
+     "maxTaskMs": 1.632,
+     "tasks": 8,
+     "heapKb": 95.328125,
+     "styleMs": 22.791246399769587,
+     "layoutMs": 4.010448012672811,
+     "maxFrameMs": 24.58375892857143
+    },
+    {
+     "totalMs": 3.4210000000000003,
+     "maxTaskMs": 1.424,
+     "tasks": 8,
+     "heapKb": 93.125,
+     "styleMs": 32.93921334182455,
+     "layoutMs": 9.320084859098868,
+     "maxFrameMs": 39.85657092819615
+    },
+    {
+     "totalMs": 3.02,
+     "maxTaskMs": 1.555,
+     "tasks": 6,
+     "heapKb": 80.6171875,
+     "styleMs": 26.82430561162697,
+     "layoutMs": 4.231959133115573,
+     "maxFrameMs": 28.218128381106176
+    }
+   ]
+  },
+  "small PR · conversation": {
+   "samples": [
+    {
+     "totalMs": 3.315,
+     "maxTaskMs": 0.765,
+     "tasks": 8,
+     "heapKb": 87.28515625,
+     "styleMs": 4.38090756302521,
+     "layoutMs": 6.368193277310925,
+     "maxFrameMs": 9.833571428571428
+    },
+    {
+     "totalMs": 3.5,
+     "maxTaskMs": 0.78,
+     "tasks": 11,
+     "heapKb": 89.8203125,
+     "styleMs": 0.22651908432828805,
+     "layoutMs": 0.150488107549121,
+     "maxFrameMs": 0.21054545454545456
+    },
+    {
+     "totalMs": 3.074,
+     "maxTaskMs": 0.614,
+     "tasks": 9,
+     "heapKb": 95.703125,
+     "styleMs": 0.22468724696356276,
+     "layoutMs": 0.13098178137651822,
+     "maxFrameMs": 0.27251113360323886
+    },
+    {
+     "totalMs": 3.507,
+     "maxTaskMs": 0.855,
+     "tasks": 10,
+     "heapKb": 86.2734375,
+     "styleMs": 4.146028571428571,
+     "layoutMs": 6.040528571428572,
+     "maxFrameMs": 10.111214285714286
+    },
+    {
+     "totalMs": 3.5609999999999995,
+     "maxTaskMs": 0.563,
+     "tasks": 11,
+     "heapKb": 87.9375,
+     "styleMs": 0.09254747756361953,
+     "layoutMs": 0.09464530641833782,
+     "maxFrameMs": 0.1517078593588418
+    },
+    {
+     "totalMs": 3.807,
+     "maxTaskMs": 0.816,
+     "tasks": 11,
+     "heapKb": 91.72265625,
+     "styleMs": 0.20737147255002564,
+     "layoutMs": 0.14353654554783338,
+     "maxFrameMs": 0.20436363636363636
+    },
+    {
+     "totalMs": 2.9880000000000004,
+     "maxTaskMs": 0.688,
+     "tasks": 8,
+     "heapKb": 99.15625,
+     "styleMs": 0.13924785065094572,
+     "layoutMs": 0.12546008351756324,
+     "maxFrameMs": 0.19375141242937854
+    },
+    {
+     "totalMs": 2.689,
+     "maxTaskMs": 0.89,
+     "tasks": 8,
+     "heapKb": 74.3515625,
+     "styleMs": 0.7003636363636364,
+     "layoutMs": 0.43147430830039524,
+     "maxFrameMs": 0.8785652173913043
+    },
+    {
+     "totalMs": 3.388,
+     "maxTaskMs": 0.744,
+     "tasks": 9,
+     "heapKb": 88.64453125,
+     "styleMs": 0.241897021058038,
+     "layoutMs": 0.15457627118644068,
+     "maxFrameMs": 0.21477272727272728
+    }
+   ]
+  },
+  "small PR · files": {
+   "samples": [
+    {
+     "totalMs": 4.617999999999999,
+     "maxTaskMs": 1.492,
+     "tasks": 9,
+     "heapKb": 104.74609375,
+     "styleMs": 103.55198482088646,
+     "layoutMs": 13.39652483302975,
+     "maxFrameMs": 115.87030965391621
+    },
+    {
+     "totalMs": 4.319,
+     "maxTaskMs": 1.497,
+     "tasks": 8,
+     "heapKb": 113.0859375,
+     "styleMs": 115.48480837887068,
+     "layoutMs": 18.25606703096539,
+     "maxFrameMs": 132.51147540983607
+    },
+    {
+     "totalMs": 4.723000000000001,
+     "maxTaskMs": 1.231,
+     "tasks": 8,
+     "heapKb": 102.0703125,
+     "styleMs": 74.07537629030026,
+     "layoutMs": 20.08392785042203,
+     "maxFrameMs": 91.73160414072228
+    },
+    {
+     "totalMs": 4.531000000000001,
+     "maxTaskMs": 1.169,
+     "tasks": 9,
+     "heapKb": 115.05859375,
+     "styleMs": 101.8481709775349,
+     "layoutMs": 13.306003885853064,
+     "maxFrameMs": 113.69617486338797
+    },
+    {
+     "totalMs": 4.7540000000000004,
+     "maxTaskMs": 1.456,
+     "tasks": 8,
+     "heapKb": 108.4296875,
+     "styleMs": 109.51868099574985,
+     "layoutMs": 17.957399757134183,
+     "maxFrameMs": 126.26108075288403
+    },
+    {
+     "totalMs": 4.0569999999999995,
+     "maxTaskMs": 1.157,
+     "tasks": 7,
+     "heapKb": 106.46875,
+     "styleMs": 102.1327254401943,
+     "layoutMs": 13.477772191863995,
+     "maxFrameMs": 113.1336976320583
+    },
+    {
+     "totalMs": 4.7250000000000005,
+     "maxTaskMs": 1.429,
+     "tasks": 7,
+     "heapKb": 125.46875,
+     "styleMs": 112.5536409228901,
+     "layoutMs": 18.52849459623558,
+     "maxFrameMs": 128.59453551912569
+    },
+    {
+     "totalMs": 4.775,
+     "maxTaskMs": 1.439,
+     "tasks": 9,
+     "heapKb": 106.515625,
+     "styleMs": 109.91067043108683,
+     "layoutMs": 17.67262027929569,
+     "maxFrameMs": 126.53989071038251
+    },
+    {
+     "totalMs": 4.672,
+     "maxTaskMs": 1.045,
+     "tasks": 8,
+     "heapKb": 98.98046875,
+     "styleMs": 121.47068642911297,
+     "layoutMs": 15.650110295678545,
+     "maxFrameMs": 133.9854767247915
+    }
+   ]
+  },
+  "non-PR page (repo home)": {
+   "samples": [
+    {
+     "totalMs": 0.07,
+     "maxTaskMs": 0.07,
+     "tasks": 1,
+     "heapKb": 1.15625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0,
+     "maxTaskMs": 0,
+     "tasks": 0,
+     "heapKb": 2.9765625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0,
+     "maxTaskMs": 0,
+     "tasks": 0,
+     "heapKb": 2.37109375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.154,
+     "maxTaskMs": 0.154,
+     "tasks": 1,
+     "heapKb": 3.90625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.157,
+     "maxTaskMs": 0.082,
+     "tasks": 2,
+     "heapKb": 1.328125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.16599999999999998,
+     "maxTaskMs": 0.088,
+     "tasks": 2,
+     "heapKb": 1.07421875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.075,
+     "maxTaskMs": 0.075,
+     "tasks": 1,
+     "heapKb": 3.1328125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.209,
+     "maxTaskMs": 0.105,
+     "tasks": 2,
+     "heapKb": 2.98046875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.097,
+     "maxTaskMs": 0.097,
+     "tasks": 1,
+     "heapKb": 1.0234375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    }
+   ]
+  },
+  "repo → small PR (soft nav)": {
+   "samples": [
+    {
+     "totalMs": 5.373000000000001,
+     "maxTaskMs": 0.949,
+     "tasks": 14,
+     "heapKb": 115.015625,
+     "styleMs": 1.1418333333333333,
+     "layoutMs": 0.50075,
+     "maxFrameMs": 1.40525
+    },
+    {
+     "totalMs": 5.173000000000001,
+     "maxTaskMs": 1.2,
+     "tasks": 15,
+     "heapKb": 107.37890625,
+     "styleMs": 0.13763437025796663,
+     "layoutMs": 0.056898634294385436,
+     "maxFrameMs": 0.09775
+    },
+    {
+     "totalMs": 5.4190000000000005,
+     "maxTaskMs": 1.078,
+     "tasks": 12,
+     "heapKb": 120.89453125,
+     "styleMs": 0.10776470588235293,
+     "layoutMs": 0.043791176470588236,
+     "maxFrameMs": 0.08345588235294117
+    },
+    {
+     "totalMs": 5.326,
+     "maxTaskMs": 1.117,
+     "tasks": 13,
+     "heapKb": 134.72265625,
+     "styleMs": 1.0450333333333333,
+     "layoutMs": 0.4807666666666666,
+     "maxFrameMs": 1.4547499999999998
+    },
+    {
+     "totalMs": 5.215,
+     "maxTaskMs": 0.976,
+     "tasks": 11,
+     "heapKb": 123.81640625,
+     "styleMs": 1.0734166666666667,
+     "layoutMs": 0.5264833333333332,
+     "maxFrameMs": 1.5262499999999999
+    },
+    {
+     "totalMs": 5.74,
+     "maxTaskMs": 1.019,
+     "tasks": 12,
+     "heapKb": 128.51171875,
+     "styleMs": 1.1492499999999999,
+     "layoutMs": 0.4671166666666666,
+     "maxFrameMs": 1.5436666666666665
+    },
+    {
+     "totalMs": 5.364,
+     "maxTaskMs": 1.013,
+     "tasks": 11,
+     "heapKb": 121.1953125,
+     "styleMs": 1.0931000000000002,
+     "layoutMs": 0.4739833333333333,
+     "maxFrameMs": 1.4785833333333334
+    },
+    {
+     "totalMs": 5.1419999999999995,
+     "maxTaskMs": 0.997,
+     "tasks": 14,
+     "heapKb": 123.9765625,
+     "styleMs": 0.1943208568496665,
+     "layoutMs": 0.08867893791688045,
+     "maxFrameMs": 0.20259979476654694
+    },
+    {
+     "totalMs": 5.227,
+     "maxTaskMs": 0.922,
+     "tasks": 12,
+     "heapKb": 126.9453125,
+     "styleMs": 0.985452380952381,
+     "layoutMs": 0.4647857142857143,
+     "maxFrameMs": 1.375
+    }
+   ]
+  },
+  "huge PR · files, scrolling": {
+   "samples": [
+    {
+     "totalMs": 3.1660000000000004,
+     "maxTaskMs": 2.744,
+     "tasks": 2,
+     "heapKb": 11.16796875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.55,
+     "maxTaskMs": 3.062,
+     "tasks": 2,
+     "heapKb": 16.35546875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.213,
+     "maxTaskMs": 2.799,
+     "tasks": 2,
+     "heapKb": 16.81640625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.2520000000000002,
+     "maxTaskMs": 2.838,
+     "tasks": 2,
+     "heapKb": 15.4453125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.2560000000000002,
+     "maxTaskMs": 2.83,
+     "tasks": 2,
+     "heapKb": 14.57421875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.23,
+     "maxTaskMs": 2.786,
+     "tasks": 2,
+     "heapKb": 16.98828125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.1220000000000003,
+     "maxTaskMs": 2.7,
+     "tasks": 2,
+     "heapKb": 13.7890625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.141,
+     "maxTaskMs": 2.726,
+     "tasks": 2,
+     "heapKb": 18.67578125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.463,
+     "maxTaskMs": 2.991,
+     "tasks": 2,
+     "heapKb": 17.41796875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    }
+   ]
+  },
+  "huge PR · conv. → files (soft)": {
+   "samples": [
+    {
+     "totalMs": 7.58,
+     "maxTaskMs": 1.924,
+     "tasks": 19,
+     "heapKb": 107.8984375,
+     "styleMs": 0.04565671641791044,
+     "layoutMs": 0.021567164179104478,
+     "maxFrameMs": 0.06722388059701492
+    },
+    {
+     "totalMs": 8.29,
+     "maxTaskMs": 2.061,
+     "tasks": 18,
+     "heapKb": 111.73046875,
+     "styleMs": 28.974155766531965,
+     "layoutMs": 26.677855282750368,
+     "maxFrameMs": 55.004000000000005
+    },
+    {
+     "totalMs": 7.106999999999999,
+     "maxTaskMs": 2.033,
+     "tasks": 18,
+     "heapKb": 104.77734375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 7.953000000000001,
+     "maxTaskMs": 1.937,
+     "tasks": 22,
+     "heapKb": 113.703125,
+     "styleMs": 0.04483582089552239,
+     "layoutMs": 0.021283582089552236,
+     "maxFrameMs": 0.06611940298507463
+    },
+    {
+     "totalMs": 4.0200000000000005,
+     "maxTaskMs": 0.685,
+     "tasks": 13,
+     "heapKb": 102.81640625,
+     "styleMs": 29.238463927771004,
+     "layoutMs": 23.478639309187454,
+     "maxFrameMs": 49.344
+    },
+    {
+     "totalMs": 7.081000000000001,
+     "maxTaskMs": 1.991,
+     "tasks": 21,
+     "heapKb": 112.3203125,
+     "styleMs": 0.03135294117647059,
+     "layoutMs": 0.0045882352941176464,
+     "maxFrameMs": 0.03594117647058824
+    },
+    {
+     "totalMs": 7.6190000000000015,
+     "maxTaskMs": 1.996,
+     "tasks": 22,
+     "heapKb": 107.140625,
+     "styleMs": 28.75715124888665,
+     "layoutMs": 29.54540867185584,
+     "maxFrameMs": 56.644999999999996
+    },
+    {
+     "totalMs": 5.533000000000001,
+     "maxTaskMs": 0.846,
+     "tasks": 19,
+     "heapKb": 106.1640625,
+     "styleMs": 28.46158551571757,
+     "layoutMs": 30.428290904006282,
+     "maxFrameMs": 57.340999999999994
+    },
+    {
+     "totalMs": 4.964,
+     "maxTaskMs": 0.847,
+     "tasks": 15,
+     "heapKb": 108.19140625,
+     "styleMs": 9.581685205661213,
+     "layoutMs": 11.389297383163793,
+     "maxFrameMs": 19.014233333333337
+    }
+   ]
+  },
+  "huge PR · files → conv. (soft)": {
+   "samples": [
+    {
+     "totalMs": 6.026000000000001,
+     "maxTaskMs": 1.477,
+     "tasks": 18,
+     "heapKb": 109.38671875,
+     "styleMs": 25.07031752496944,
+     "layoutMs": 3.763678639756328,
+     "maxFrameMs": 23.575281250000003
+    },
+    {
+     "totalMs": 5.8629999999999995,
+     "maxTaskMs": 1.359,
+     "tasks": 16,
+     "heapKb": 104.1796875,
+     "styleMs": 1057.2310175532048,
+     "layoutMs": 3.9201693841371408,
+     "maxFrameMs": 1061.025915682281
+    },
+    {
+     "totalMs": 5.7,
+     "maxTaskMs": 1.121,
+     "tasks": 16,
+     "heapKb": 106.28515625,
+     "styleMs": 1002.2101282570133,
+     "layoutMs": 3.452191708823336,
+     "maxFrameMs": 1003.3989006109979
+    },
+    {
+     "totalMs": 1.908,
+     "maxTaskMs": 0.854,
+     "tasks": 8,
+     "heapKb": 110.21484375,
+     "styleMs": 42.78936615058536,
+     "layoutMs": 12.042067215500666,
+     "maxFrameMs": 50.87090819556806
+    },
+    {
+     "totalMs": 5.793,
+     "maxTaskMs": 1.296,
+     "tasks": 16,
+     "heapKb": 95.7109375,
+     "styleMs": 29.527595634231016,
+     "layoutMs": 4.904788288277803,
+     "maxFrameMs": 25.191035714285718
+    },
+    {
+     "totalMs": 5.829000000000001,
+     "maxTaskMs": 1.363,
+     "tasks": 18,
+     "heapKb": 95.7890625,
+     "styleMs": 24.808816251198046,
+     "layoutMs": 4.326368276398612,
+     "maxFrameMs": 23.10446054229057
+    },
+    {
+     "totalMs": 3.228,
+     "maxTaskMs": 1.267,
+     "tasks": 9,
+     "heapKb": 108.765625,
+     "styleMs": 26.29009693333751,
+     "layoutMs": 4.089748898457471,
+     "maxFrameMs": 23.45490673154907
+    },
+    {
+     "totalMs": 5.969999999999999,
+     "maxTaskMs": 1.377,
+     "tasks": 19,
+     "heapKb": 104.05078125,
+     "styleMs": 27.961580238892022,
+     "layoutMs": 6.436219138952833,
+     "maxFrameMs": 25.690403714170365
+    },
+    {
+     "totalMs": 6.804,
+     "maxTaskMs": 1.345,
+     "tasks": 21,
+     "heapKb": 115.4765625,
+     "styleMs": 37.25771383801409,
+     "layoutMs": 10.332082842217616,
+     "maxFrameMs": 41.991939075630256
+    }
+   ]
+  }
+ },
+ "r3": {
+  "huge PR · conversation": {
+   "samples": [
+    {
+     "totalMs": 5.442000000000001,
+     "maxTaskMs": 1.252,
+     "tasks": 14,
+     "heapKb": 98.08203125,
+     "styleMs": 0.4300596399449518,
+     "layoutMs": 0.25105126929266575,
+     "maxFrameMs": 0.3839130434782609
+    },
+    {
+     "totalMs": 5.159999999999999,
+     "maxTaskMs": 0.954,
+     "tasks": 17,
+     "heapKb": 106.59765625,
+     "styleMs": 0.580068830290737,
+     "layoutMs": 0.4499628127112914,
+     "maxFrameMs": 0.8908666666666667
+    },
+    {
+     "totalMs": 4.019,
+     "maxTaskMs": 1.061,
+     "tasks": 17,
+     "heapKb": 110.11328125,
+     "styleMs": 0.5811477058342095,
+     "layoutMs": 0.7478832807859516,
+     "maxFrameMs": 0.9732857142857143
+    },
+    {
+     "totalMs": 5.2570000000000014,
+     "maxTaskMs": 1.046,
+     "tasks": 19,
+     "heapKb": 82.52734375,
+     "styleMs": 0.4421038322925023,
+     "layoutMs": 0.4908202834931899,
+     "maxFrameMs": 0.6742307692307692
+    },
+    {
+     "totalMs": 4.789,
+     "maxTaskMs": 1.035,
+     "tasks": 14,
+     "heapKb": 118.0859375,
+     "styleMs": 1.2881726305609285,
+     "layoutMs": 5.427700435203095,
+     "maxFrameMs": 6.612136363636363
+    },
+    {
+     "totalMs": 4.998000000000001,
+     "maxTaskMs": 1.312,
+     "tasks": 17,
+     "heapKb": 103,
+     "styleMs": 0.262268813708444,
+     "layoutMs": 0.21778738295787597,
+     "maxFrameMs": 0.32056520335700456
+    },
+    {
+     "totalMs": 4.981999999999999,
+     "maxTaskMs": 0.958,
+     "tasks": 21,
+     "heapKb": 84.27734375,
+     "styleMs": 0.6585000000000001,
+     "layoutMs": 0.2405,
+     "maxFrameMs": 0.4685
+    },
+    {
+     "totalMs": 4.997999999999999,
+     "maxTaskMs": 1.252,
+     "tasks": 16,
+     "heapKb": 100.8828125,
+     "styleMs": 0.2731052113237092,
+     "layoutMs": 0.33092202519126956,
+     "maxFrameMs": 0.3104719173660426
+    },
+    {
+     "totalMs": 5.068,
+     "maxTaskMs": 1.061,
+     "tasks": 16,
+     "heapKb": 111.06640625,
+     "styleMs": 0.7231457818540697,
+     "layoutMs": 0.2884587349643448,
+     "maxFrameMs": 0.491
+    }
+   ]
+  },
+  "huge PR · files": {
+   "samples": [
+    {
+     "totalMs": 6.2909999999999995,
+     "maxTaskMs": 3.657,
+     "tasks": 5,
+     "heapKb": 102.60546875,
+     "styleMs": 2.623706018518518,
+     "layoutMs": 1.0796435185185185,
+     "maxFrameMs": 3.7033495370370364
+    },
+    {
+     "totalMs": 6.194,
+     "maxTaskMs": 3.476,
+     "tasks": 9,
+     "heapKb": 100.80078125,
+     "styleMs": 1.6117297297297297,
+     "layoutMs": 0.2866983783783784,
+     "maxFrameMs": 1.32432
+    },
+    {
+     "totalMs": 4.045000000000001,
+     "maxTaskMs": 1.371,
+     "tasks": 7,
+     "heapKb": 96.3828125,
+     "styleMs": 2.842470287396834,
+     "layoutMs": 1.2484676935559667,
+     "maxFrameMs": 3.969377314814815
+    },
+    {
+     "totalMs": 6.610000000000001,
+     "maxTaskMs": 3.494,
+     "tasks": 10,
+     "heapKb": 102.8046875,
+     "styleMs": 0.5746995230524642,
+     "layoutMs": 0.23328139904610495,
+     "maxFrameMs": 0.6886486486486487
+    },
+    {
+     "totalMs": 6.417999999999999,
+     "maxTaskMs": 3.451,
+     "tasks": 9,
+     "heapKb": 113.453125,
+     "styleMs": 2.4995879629629627,
+     "layoutMs": 1.1376782407407406,
+     "maxFrameMs": 3.637266203703703
+    },
+    {
+     "totalMs": 6.149000000000002,
+     "maxTaskMs": 3.422,
+     "tasks": 10,
+     "heapKb": 114.24609375,
+     "styleMs": 3.6101798148148148,
+     "layoutMs": 1.2681052777777777,
+     "maxFrameMs": 3.6254050925925925
+    },
+    {
+     "totalMs": 6.399,
+     "maxTaskMs": 3.355,
+     "tasks": 10,
+     "heapKb": 109.890625,
+     "styleMs": 3.903164764079148,
+     "layoutMs": 1.325720826991375,
+     "maxFrameMs": 3.8479814814814817
+    },
+    {
+     "totalMs": 5.383000000000001,
+     "maxTaskMs": 3.72,
+     "tasks": 5,
+     "heapKb": 96.265625,
+     "styleMs": 5.531231075697211,
+     "layoutMs": 0.5332822993739328,
+     "maxFrameMs": 5.978142857142857
+    },
+    {
+     "totalMs": 7.263000000000001,
+     "maxTaskMs": 4.336,
+     "tasks": 7,
+     "heapKb": 110.66015625,
+     "styleMs": 9.621991040505948,
+     "layoutMs": 0.35017440897455204,
+     "maxFrameMs": 9.900620689655172
+    }
+   ]
+  },
+  "small PR · conversation": {
+   "samples": [
+    {
+     "totalMs": 4.811999999999999,
+     "maxTaskMs": 0.828,
+     "tasks": 20,
+     "heapKb": 75.265625,
+     "styleMs": 0.7845379851863844,
+     "layoutMs": 0.6265133929655563,
+     "maxFrameMs": 1.1861612903225804
+    },
+    {
+     "totalMs": 4.566,
+     "maxTaskMs": 0.85,
+     "tasks": 19,
+     "heapKb": 108.03515625,
+     "styleMs": 1.3226917010216885,
+     "layoutMs": 1.0742715204337694,
+     "maxFrameMs": 1.6434375
+    },
+    {
+     "totalMs": 5.085999999999999,
+     "maxTaskMs": 0.869,
+     "tasks": 20,
+     "heapKb": 112.0078125,
+     "styleMs": 0.7991272727272727,
+     "layoutMs": 0.6678545454545455,
+     "maxFrameMs": 1.1588181818181817
+    },
+    {
+     "totalMs": 6.132,
+     "maxTaskMs": 0.838,
+     "tasks": 23,
+     "heapKb": 104.8671875,
+     "styleMs": 0.852692082111437,
+     "layoutMs": 0.5908726295210166,
+     "maxFrameMs": 1.1949677419354838
+    },
+    {
+     "totalMs": 5.7330000000000005,
+     "maxTaskMs": 0.96,
+     "tasks": 22,
+     "heapKb": 115.8828125,
+     "styleMs": 6.19656768133681,
+     "layoutMs": 7.625971427811186,
+     "maxFrameMs": 13.612255813953489
+    },
+    {
+     "totalMs": 5.082000000000001,
+     "maxTaskMs": 0.932,
+     "tasks": 22,
+     "heapKb": 113.59375,
+     "styleMs": 0.885024344925024,
+     "layoutMs": 0.6117333841879682,
+     "maxFrameMs": 1.197
+    },
+    {
+     "totalMs": 5.322999999999999,
+     "maxTaskMs": 0.84,
+     "tasks": 20,
+     "heapKb": 103.88671875,
+     "styleMs": 1.386977272727273,
+     "layoutMs": 0.9984545454545455,
+     "maxFrameMs": 1.7811818181818184
+    },
+    {
+     "totalMs": 4.019000000000001,
+     "maxTaskMs": 0.525,
+     "tasks": 14,
+     "heapKb": 114.515625,
+     "styleMs": 0.9664510263929619,
+     "layoutMs": 0.6600545454545454,
+     "maxFrameMs": 1.159741935483871
+    },
+    {
+     "totalMs": 4.906000000000001,
+     "maxTaskMs": 0.743,
+     "tasks": 18,
+     "heapKb": 118.6015625,
+     "styleMs": 0.3974832662380581,
+     "layoutMs": 0.34022276632818604,
+     "maxFrameMs": 0.3035990806945863
+    }
+   ]
+  },
+  "small PR · files": {
+   "samples": [
+    {
+     "totalMs": 3.6280000000000006,
+     "maxTaskMs": 1.171,
+     "tasks": 7,
+     "heapKb": 125.875,
+     "styleMs": 3.2726214176995,
+     "layoutMs": 1.6352482931071972,
+     "maxFrameMs": 2.588
+    },
+    {
+     "totalMs": 2.9309999999999996,
+     "maxTaskMs": 1.275,
+     "tasks": 5,
+     "heapKb": 123.8828125,
+     "styleMs": 10.636944292237443,
+     "layoutMs": 2.0002200913242008,
+     "maxFrameMs": 11.410164383561645
+    },
+    {
+     "totalMs": 5.364000000000001,
+     "maxTaskMs": 2.527,
+     "tasks": 6,
+     "heapKb": 116.0625,
+     "styleMs": 9.48711506849315,
+     "layoutMs": 1.5664310502283103,
+     "maxFrameMs": 9.800146118721461
+    },
+    {
+     "totalMs": 5.0200000000000005,
+     "maxTaskMs": 1.49,
+     "tasks": 9,
+     "heapKb": 125.30859375,
+     "styleMs": 9.516630136986302,
+     "layoutMs": 1.7115634703196345,
+     "maxFrameMs": 9.106593607305935
+    },
+    {
+     "totalMs": 5.030000000000001,
+     "maxTaskMs": 1.837,
+     "tasks": 10,
+     "heapKb": 127.1328125,
+     "styleMs": 4.811676502450157,
+     "layoutMs": 3.039619426016124,
+     "maxFrameMs": 6.370096069868996
+    },
+    {
+     "totalMs": 4.155,
+     "maxTaskMs": 1.692,
+     "tasks": 8,
+     "heapKb": 115.91015625,
+     "styleMs": 5.318380927175687,
+     "layoutMs": 2.543103021481187,
+     "maxFrameMs": 5.314096069868995
+    },
+    {
+     "totalMs": 6.010999999999999,
+     "maxTaskMs": 1.776,
+     "tasks": 10,
+     "heapKb": 129.84765625,
+     "styleMs": 10.629327853881279,
+     "layoutMs": 2.2110091324200916,
+     "maxFrameMs": 10.30413698630137
+    },
+    {
+     "totalMs": 3.5919999999999996,
+     "maxTaskMs": 1.927,
+     "tasks": 5,
+     "heapKb": 128.5234375,
+     "styleMs": 10.29301917808219,
+     "layoutMs": 1.7734785388127854,
+     "maxFrameMs": 10.845497716894975
+    },
+    {
+     "totalMs": 5.545000000000001,
+     "maxTaskMs": 1.844,
+     "tasks": 8,
+     "heapKb": 130.75,
+     "styleMs": 10.008521461187213,
+     "layoutMs": 1.992214611872146,
+     "maxFrameMs": 10.831936073059358
+    }
+   ]
+  },
+  "non-PR page (repo home)": {
+   "samples": [
+    {
+     "totalMs": 0.071,
+     "maxTaskMs": 0.071,
+     "tasks": 1,
+     "heapKb": 2.875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0,
+     "maxTaskMs": 0,
+     "tasks": 0,
+     "heapKb": 1.8515625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.079,
+     "maxTaskMs": 0.079,
+     "tasks": 1,
+     "heapKb": 3.4609375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.165,
+     "maxTaskMs": 0.165,
+     "tasks": 1,
+     "heapKb": 3.40625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.214,
+     "maxTaskMs": 0.214,
+     "tasks": 1,
+     "heapKb": 3.48046875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.095,
+     "maxTaskMs": 0.095,
+     "tasks": 1,
+     "heapKb": 2.625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.15300000000000002,
+     "maxTaskMs": 0.084,
+     "tasks": 2,
+     "heapKb": 1.3203125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0,
+     "maxTaskMs": 0,
+     "tasks": 0,
+     "heapKb": 2.55078125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 0.084,
+     "maxTaskMs": 0.084,
+     "tasks": 1,
+     "heapKb": 2.078125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    }
+   ]
+  },
+  "repo → small PR (soft nav)": {
+   "samples": [
+    {
+     "totalMs": 6.404,
+     "maxTaskMs": 1.064,
+     "tasks": 18,
+     "heapKb": 134.546875,
+     "styleMs": 9.905270212765958,
+     "layoutMs": 8.084251413480137,
+     "maxFrameMs": 15.481021276595744
+    },
+    {
+     "totalMs": 6.912,
+     "maxTaskMs": 1.221,
+     "tasks": 19,
+     "heapKb": 141.078125,
+     "styleMs": 9.457560714285714,
+     "layoutMs": 6.967923469387753,
+     "maxFrameMs": 14.584959183673469
+    },
+    {
+     "totalMs": 7.989,
+     "maxTaskMs": 1.137,
+     "tasks": 22,
+     "heapKb": 156.10546875,
+     "styleMs": 9.270492188697276,
+     "layoutMs": 8.385974964466762,
+     "maxFrameMs": 15.353830188679247
+    },
+    {
+     "totalMs": 7.54,
+     "maxTaskMs": 1.278,
+     "tasks": 20,
+     "heapKb": 149.65234375,
+     "styleMs": 9.605722195764185,
+     "layoutMs": 7.635790404401607,
+     "maxFrameMs": 15.149872340425532
+    },
+    {
+     "totalMs": 4.12,
+     "maxTaskMs": 1.535,
+     "tasks": 9,
+     "heapKb": 158.95703125,
+     "styleMs": 10.212824973408425,
+     "layoutMs": 9.929950103717735,
+     "maxFrameMs": 19.39394117647059
+    },
+    {
+     "totalMs": 6.301,
+     "maxTaskMs": 1.392,
+     "tasks": 16,
+     "heapKb": 133.17578125,
+     "styleMs": 9.721558695652174,
+     "layoutMs": 8.05777608695652,
+     "maxFrameMs": 15.239428571428572
+    },
+    {
+     "totalMs": 7.409000000000001,
+     "maxTaskMs": 1.289,
+     "tasks": 22,
+     "heapKb": 145.9453125,
+     "styleMs": 9.553167546477706,
+     "layoutMs": 8.544253349873658,
+     "maxFrameMs": 17.422468085106384
+    },
+    {
+     "totalMs": 6.401999999999999,
+     "maxTaskMs": 1.275,
+     "tasks": 15,
+     "heapKb": 155.7265625,
+     "styleMs": 9.999786631016047,
+     "layoutMs": 7.920063279857398,
+     "maxFrameMs": 15.631686274509807
+    },
+    {
+     "totalMs": 6.934999999999999,
+     "maxTaskMs": 1.333,
+     "tasks": 16,
+     "heapKb": 147.5,
+     "styleMs": 10.46455462184874,
+     "layoutMs": 8.590714285714284,
+     "maxFrameMs": 17.250857142857143
+    }
+   ]
+  },
+  "huge PR · files, scrolling": {
+   "samples": [
+    {
+     "totalMs": 3.353,
+     "maxTaskMs": 2.922,
+     "tasks": 2,
+     "heapKb": 47.40625,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.503,
+     "maxTaskMs": 2.956,
+     "tasks": 2,
+     "heapKb": 12.70703125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.098,
+     "maxTaskMs": 2.667,
+     "tasks": 2,
+     "heapKb": 11.19921875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.127,
+     "maxTaskMs": 2.643,
+     "tasks": 2,
+     "heapKb": 11.6875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 2.957,
+     "maxTaskMs": 2.65,
+     "tasks": 2,
+     "heapKb": 10.32421875,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.223,
+     "maxTaskMs": 2.753,
+     "tasks": 2,
+     "heapKb": 14.86328125,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 2.247,
+     "maxTaskMs": 1.47,
+     "tasks": 4,
+     "heapKb": 16.46484375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.304,
+     "maxTaskMs": 2.88,
+     "tasks": 2,
+     "heapKb": 13.27734375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    },
+    {
+     "totalMs": 3.375,
+     "maxTaskMs": 3.092,
+     "tasks": 2,
+     "heapKb": 16.55859375,
+     "styleMs": 0,
+     "layoutMs": 0,
+     "maxFrameMs": 0
+    }
+   ]
+  },
+  "huge PR · conv. → files (soft)": {
+   "samples": [
+    {
+     "totalMs": 9.428999999999997,
+     "maxTaskMs": 2.199,
+     "tasks": 26,
+     "heapKb": 126.9375,
+     "styleMs": 27.193863899251138,
+     "layoutMs": 23.298267890337723,
+     "maxFrameMs": 49.010999999999996
+    },
+    {
+     "totalMs": 9.869,
+     "maxTaskMs": 1.96,
+     "tasks": 29,
+     "heapKb": 117.9296875,
+     "styleMs": 0.0317843137254902,
+     "layoutMs": 0.00492156862745098,
+     "maxFrameMs": 0.03670588235294118
+    },
+    {
+     "totalMs": 9.578,
+     "maxTaskMs": 1.906,
+     "tasks": 28,
+     "heapKb": 128.71484375,
+     "styleMs": 27.37689604561533,
+     "layoutMs": 24.396558325853967,
+     "maxFrameMs": 50.071
+    },
+    {
+     "totalMs": 10.512,
+     "maxTaskMs": 1.89,
+     "tasks": 32,
+     "heapKb": 143.2109375,
+     "styleMs": 0.03315686274509804,
+     "layoutMs": 0.005058823529411765,
+     "maxFrameMs": 0.0382156862745098
+    },
+    {
+     "totalMs": 10.344000000000001,
+     "maxTaskMs": 2.272,
+     "tasks": 24,
+     "heapKb": 126.6796875,
+     "styleMs": 28.903556000445008,
+     "layoutMs": 27.847735828067382,
+     "maxFrameMs": 56.027
+    },
+    {
+     "totalMs": 7.683000000000001,
+     "maxTaskMs": 2.516,
+     "tasks": 14,
+     "heapKb": 131.171875,
+     "styleMs": 25.83752173929012,
+     "layoutMs": 22.866989332970952,
+     "maxFrameMs": 46.865
+    },
+    {
+     "totalMs": 9.687000000000001,
+     "maxTaskMs": 2.134,
+     "tasks": 31,
+     "heapKb": 117.2421875,
+     "styleMs": 27.283248197342246,
+     "layoutMs": 23.683546937009684,
+     "maxFrameMs": 49.064
+    },
+    {
+     "totalMs": 8.160000000000002,
+     "maxTaskMs": 2.148,
+     "tasks": 26,
+     "heapKb": 106.3671875,
+     "styleMs": 28.860068147361346,
+     "layoutMs": 28.644188631311476,
+     "maxFrameMs": 55.97
+    },
+    {
+     "totalMs": 5.696000000000001,
+     "maxTaskMs": 1.964,
+     "tasks": 21,
+     "heapKb": 94.19921875,
+     "styleMs": 35.70305009856018,
+     "layoutMs": 33.00507415159838,
+     "maxFrameMs": 64.074
+    }
+   ]
+  },
+  "huge PR · files → conv. (soft)": {
+   "samples": [
+    {
+     "totalMs": 8.626999999999999,
+     "maxTaskMs": 3.233,
+     "tasks": 20,
+     "heapKb": 120.078125,
+     "styleMs": 12.945895689078906,
+     "layoutMs": 12.166846552864664,
+     "maxFrameMs": 17.2375
+    },
+    {
+     "totalMs": 8.402000000000001,
+     "maxTaskMs": 3.378,
+     "tasks": 17,
+     "heapKb": 141.328125,
+     "styleMs": 4.489733865006908,
+     "layoutMs": 1.012445804677109,
+     "maxFrameMs": 3.6044046822742475
+    },
+    {
+     "totalMs": 9.530000000000001,
+     "maxTaskMs": 3.739,
+     "tasks": 18,
+     "heapKb": 116.2109375,
+     "styleMs": 20.651098940243365,
+     "layoutMs": 14.260594977408445,
+     "maxFrameMs": 16.7465
+    },
+    {
+     "totalMs": 7.348000000000001,
+     "maxTaskMs": 1.112,
+     "tasks": 24,
+     "heapKb": 129.80078125,
+     "styleMs": 32.94962203506412,
+     "layoutMs": 17.214857058005244,
+     "maxFrameMs": 32.79568421052631
+    },
+    {
+     "totalMs": 8.716,
+     "maxTaskMs": 3.709,
+     "tasks": 17,
+     "heapKb": 114.125,
+     "styleMs": 3.194303353520745,
+     "layoutMs": 0.8364217662478531,
+     "maxFrameMs": 3.4404548494983276
+    },
+    {
+     "totalMs": 7.723,
+     "maxTaskMs": 1.595,
+     "tasks": 19,
+     "heapKb": 118.140625,
+     "styleMs": 14.89584634884836,
+     "layoutMs": 13.420973837690292,
+     "maxFrameMs": 19.3115
+    },
+    {
+     "totalMs": 8.054,
+     "maxTaskMs": 4.596,
+     "tasks": 13,
+     "heapKb": 123.3828125,
+     "styleMs": 14.783595631072124,
+     "layoutMs": 19.749594253677763,
+     "maxFrameMs": 18.575135135135135
+    },
+    {
+     "totalMs": 4.8229999999999995,
+     "maxTaskMs": 1.273,
+     "tasks": 16,
+     "heapKb": 138.05859375,
+     "styleMs": 7.9554060172290235,
+     "layoutMs": 1.098727376222544,
+     "maxFrameMs": 4.33952967525196
+    },
+    {
+     "totalMs": 2.6710000000000003,
+     "maxTaskMs": 0.553,
+     "tasks": 12,
+     "heapKb": 124.46875,
+     "styleMs": 14.672589181653032,
+     "layoutMs": 15.342361815942338,
+     "maxFrameMs": 20.3275
+    }
+   ]
+  }
+ },
+ "latency": {
+  "first-huge-files": {
+   "r2": [
+    "79 ms after data, 392 ms after navigation; numbers at 408 ms, 1 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "57 ms after data, 322 ms after navigation; numbers at 1437 ms, 6 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "145 ms after data, 403 ms after navigation; numbers at 405 ms, 3 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "124 ms after data, 412 ms after navigation; numbers at 421 ms, 3 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "137 ms after data, 404 ms after navigation; numbers at 406 ms, 3 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]"
+   ],
+   "r3": [
+    "91 ms after data, 532 ms after navigation; numbers at 545 ms, 5 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "3 ms after data, 340 ms after navigation; numbers at 627 ms, 5 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "107 ms after data, 457 ms after navigation; numbers at 453 ms, 3 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "34 ms after data, 297 ms after navigation; numbers at 300 ms, 1 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]",
+    "67 ms after data, 347 ms after navigation; numbers at 371 ms, 1 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]"
+   ]
+  },
+  "first-small-conv": {
+   "r2": [
+    "-619 ms after data, 2196 ms after navigation; numbers at 2634 ms, 6 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-85 ms after data, 901 ms after navigation; numbers at 1247 ms, 4 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-571 ms after data, 357 ms after navigation; numbers at 1151 ms, 5 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-629 ms after data, 387 ms after navigation; numbers at 1223 ms, 3 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-599 ms after data, 286 ms after navigation; numbers at 1147 ms, 4 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]"
+   ],
+   "r3": [
+    "-624 ms after data, 367 ms after navigation; numbers at 1231 ms, 5 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-675 ms after data, 277 ms after navigation; numbers at 1096 ms, 3 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-204 ms after data, 725 ms after navigation; numbers at 955 ms, 1 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-644 ms after data, 246 ms after navigation; numbers at 1067 ms, 4 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]",
+    "-547 ms after data, 291 ms after navigation; numbers at 1122 ms, 5 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]"
+   ]
+  },
+  "rev-huge-conv": {
+   "r2": [
+    "-117 ms after data, 380 ms after navigation; numbers at 642 ms, 5 frame(s) of GitHub's numbers [\"+633,146 -419,027\",\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-2 ms after data, 522 ms after navigation; numbers at 674 ms, 5 frame(s) of GitHub's numbers [\"+633,146 -419,027\",\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-98 ms after data, 322 ms after navigation; numbers at 531 ms, 2 frame(s) of GitHub's numbers [\"+633,146 -419,027\",\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-120 ms after data, 401 ms after navigation; numbers at 579 ms, 0 frame(s) of GitHub's numbers [\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-128 ms after data, 338 ms after navigation; numbers at 520 ms, 1 frame(s) of GitHub's numbers [\"+633,146 -419,027\",\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)"
+   ],
+   "r3": [
+    "-113 ms after data, 342 ms after navigation; numbers at 473 ms, 0 frame(s) of GitHub's numbers [\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-23 ms after data, 533 ms after navigation; numbers at 586 ms, 0 frame(s) of GitHub's numbers [\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-111 ms after data, 320 ms after navigation; numbers at 444 ms, 0 frame(s) of GitHub's numbers [\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-209 ms after data, 381 ms after navigation; numbers at 516 ms, 0 frame(s) of GitHub's numbers [\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-121 ms after data, 371 ms after navigation; numbers at 508 ms, 0 frame(s) of GitHub's numbers [\"+629,320 -415,913\"]; 0 frame(s) with pruned diffs shown (0 pruned)"
+   ]
+  },
+  "rev-huge-files": {
+   "r2": [
+    "33 ms after data, 268 ms after navigation; numbers at 318 ms, 4 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]; 4 frame(s) with pruned diffs shown (186 pruned)",
+    "97 ms after data, 361 ms after navigation; numbers at 345 ms, 4 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]; 4 frame(s) with pruned diffs shown (186 pruned)",
+    "27 ms after data, 260 ms after navigation; numbers at 310 ms, 4 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]; 4 frame(s) with pruned diffs shown (186 pruned)",
+    "178 ms after data, 456 ms after navigation; numbers at 363 ms, 4 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]; 4 frame(s) with pruned diffs shown (186 pruned)",
+    "170 ms after data, 473 ms after navigation; numbers at 882 ms, 9 frame(s) of GitHub's numbers [\"+633,146 −419,027\",\"+629,320 −415,913\"]; 9 frame(s) with pruned diffs shown (186 pruned)"
+   ],
+   "r3": [
+    "742 ms after data, 1032 ms after navigation; numbers at 145 ms, 0 frame(s) of GitHub's numbers [\"+629,320 −415,913\"]; 0 frame(s) with pruned diffs shown (186 pruned)",
+    "75 ms after data, 1426 ms after navigation; numbers at 160 ms, 0 frame(s) of GitHub's numbers [\"+629,320 −415,913\"]; 0 frame(s) with pruned diffs shown (186 pruned)",
+    "688 ms after data, 1016 ms after navigation; numbers at 221 ms, 0 frame(s) of GitHub's numbers [\"+629,320 −415,913\"]; 0 frame(s) with pruned diffs shown (186 pruned)",
+    "0 ms after data, 306 ms after navigation; numbers at 137 ms, 0 frame(s) of GitHub's numbers [\"+629,320 −415,913\"]; 0 frame(s) with pruned diffs shown (186 pruned)",
+    "30 ms after data, 246 ms after navigation; numbers at 131 ms, 0 frame(s) of GitHub's numbers [\"+629,320 −415,913\"]; 0 frame(s) with pruned diffs shown (186 pruned)"
+   ]
+  },
+  "rev-small-conv": {
+   "r2": [
+    "-110 ms after data, 337 ms after navigation; numbers at 509 ms, 2 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-113 ms after data, 365 ms after navigation; numbers at 501 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-111 ms after data, 358 ms after navigation; numbers at 566 ms, 3 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-104 ms after data, 301 ms after navigation; numbers at 468 ms, 2 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "6 ms after data, 559 ms after navigation; numbers at 738 ms, 11 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)"
+   ],
+   "r3": [
+    "-5 ms after data, 544 ms after navigation; numbers at 510 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-113 ms after data, 332 ms after navigation; numbers at 489 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-118 ms after data, 375 ms after navigation; numbers at 533 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-112 ms after data, 368 ms after navigation; numbers at 526 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "0 ms after data, 511 ms after navigation; numbers at 612 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)"
+   ]
+  },
+  "rev-small-files": {
+   "r2": [
+    "2586 ms after data, 496 ms after navigation; numbers at 425 ms, 2 frame(s) of GitHub's numbers [\"+751 −1,136\",\"+77 −71\"]; 2 frame(s) with pruned diffs shown (1 pruned)",
+    "612 ms after data, 1124 ms after navigation; numbers at 1197 ms, 35 frame(s) of GitHub's numbers [\"+751 −1,136\",\"+77 −71\"]; 35 frame(s) with pruned diffs shown (1 pruned)",
+    "59 ms after data, 466 ms after navigation; numbers at 529 ms, 6 frame(s) of GitHub's numbers [\"+751 −1,136\",\"+77 −71\"]; 6 frame(s) with pruned diffs shown (1 pruned)",
+    "2129 ms after data, 447 ms after navigation; numbers at 424 ms, 2 frame(s) of GitHub's numbers [\"+751 −1,136\",\"+77 −71\"]; 2 frame(s) with pruned diffs shown (1 pruned)",
+    "2191 ms after data, 426 ms after navigation; numbers at 403 ms, 2 frame(s) of GitHub's numbers [\"+751 −1,136\",\"+77 −71\"]; 2 frame(s) with pruned diffs shown (1 pruned)"
+   ],
+   "r3": [
+    "4334 ms after data, 4745 ms after navigation; numbers at 246 ms, 0 frame(s) of GitHub's numbers [\"+77 −71\"]; 0 frame(s) with pruned diffs shown (1 pruned)",
+    "2261 ms after data, 568 ms after navigation; numbers at 176 ms, 0 frame(s) of GitHub's numbers [\"+77 −71\"]; 0 frame(s) with pruned diffs shown (1 pruned)",
+    "2844 ms after data, 566 ms after navigation; numbers at 340 ms, 0 frame(s) of GitHub's numbers [\"+77 −71\"]; 0 frame(s) with pruned diffs shown (1 pruned)",
+    "2094 ms after data, 354 ms after navigation; numbers at 216 ms, 0 frame(s) of GitHub's numbers [\"+77 −71\"]; 0 frame(s) with pruned diffs shown (1 pruned)",
+    "2220 ms after data, 421 ms after navigation; numbers at 282 ms, 0 frame(s) of GitHub's numbers [\"+77 −71\"]; 0 frame(s) with pruned diffs shown (1 pruned)"
+   ]
+  },
+  "rev-soft-small": {
+   "r2": [
+    "-266 ms after data, 1354 ms after navigation; numbers at 1569 ms, 8 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-90 ms after data, 505 ms after navigation; numbers at 694 ms, 6 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-131 ms after data, 503 ms after navigation; numbers at 647 ms, 3 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-83 ms after data, 481 ms after navigation; numbers at 683 ms, 6 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-97 ms after data, 491 ms after navigation; numbers at 686 ms, 5 frame(s) of GitHub's numbers [\"+751 -1,136\",\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)"
+   ],
+   "r3": [
+    "-23 ms after data, 583 ms after navigation; numbers at 673 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-105 ms after data, 1421 ms after navigation; numbers at 1455 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-100 ms after data, 546 ms after navigation; numbers at 644 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-119 ms after data, 573 ms after navigation; numbers at 651 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)",
+    "-93 ms after data, 547 ms after navigation; numbers at 634 ms, 0 frame(s) of GitHub's numbers [\"+77 -71\"]; 0 frame(s) with pruned diffs shown (0 pruned)"
+   ]
+  }
+ }
+}

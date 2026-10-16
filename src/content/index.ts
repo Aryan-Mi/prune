@@ -6,6 +6,17 @@ import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '.
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
+import {
+  clearSnapshots,
+  CountMarks,
+  encode,
+  fingerprint,
+  pageStorage,
+  readSnapshot,
+  sameTotals,
+  saveSnapshot,
+  type Snapshot,
+} from './dom/prerender.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
 import { fetchFileTree, fetchPrTotals, fetchRepoConfig, mayBeCapped, parsePrUrl, type PrRef } from './github.ts';
@@ -30,6 +41,17 @@ const INCOMPLETE_RESCAN_MS = 250;
  * only waited for in the landmarks (see `isSettled()`).
  */
 const GIVE_UP_MS = 2000;
+let storage: Storage | null | undefined;
+
+/**
+ * Where pre-renders are kept; nothing is in private windows (see
+ * dom/prerender.ts). Opened when first needed: in Chromium that takes 1–3 ms
+ * if the page hasn't opened it yet (it does on every PR page, a little later).
+ */
+function pageStore(): Storage | null {
+  if (storage === undefined) storage = ext.extension?.inIncognitoContext ? null : pageStorage();
+  return storage;
+}
 
 interface PrData {
   /** The PR this data belongs to. */
@@ -93,6 +115,11 @@ class Controller implements UiActions, EventListenerObject {
   private readonly styles = new PruneStyles();
   private readonly counts = new CountPatcher(() => this.scheduleCheck());
   private readonly regions = new BulkRegions();
+  /** The stored pre-render of the PR shown, from the first frame until its data has settled in. */
+  private preShown: { key: string; value: Snapshot } | null = null;
+  private readonly countMarks = new CountMarks();
+  /** What is stored for the PR last shown (its fingerprint), so the same isn't written again. */
+  private storedHash: { key: string; hash: number } | null = null;
   /** Collapse mode's, imported when that setting is first on. */
   private collapser: Collapser | null = null;
   // Created on the first PR page, dropped when leaving PR pages.
@@ -168,6 +195,10 @@ class Controller implements UiActions, EventListenerObject {
   private onConfigChanged(settings: PageSettings, rulesChanged: boolean): void {
     if (!this.configured) return;
     this.settings = settings;
+    // Rare enough to start over: every PR's pre-render was for the old settings.
+    const store = pageStore();
+    if (store) clearSnapshots(store);
+    this.storedHash = null;
     if (rulesChanged) {
       // Results are only kept for the pruned files, so prune again from scratch.
       this.prCache.clear();
@@ -175,6 +206,7 @@ class Controller implements UiActions, EventListenerObject {
       return;
     }
     this.render();
+    this.remember();
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -204,6 +236,8 @@ class Controller implements UiActions, EventListenerObject {
       this.watching = true;
       // The diff list may have grown since it was last looked for.
       this.placeSection(true);
+      // What the counters show is up to their patches from now on.
+      this.dropSnapshot();
     }
     const subtrees = this.counts.places();
     // Collapse mode clicks each pruned file's toggle once its diff shows up.
@@ -323,6 +357,7 @@ class Controller implements UiActions, EventListenerObject {
   }
 
   private onLocationChange(pr: PrRef | null): void {
+    this.preRender(pr);
     if (pr && !this.configured) {
       // GitHub's responses don't depend on settings: fetch them while they load.
       const files = this.wantsFiles(pr);
@@ -343,7 +378,8 @@ class Controller implements UiActions, EventListenerObject {
     // Counters found where expected are enough at first; the whole-page search for more can wait.
     this.lastRescan = Date.now();
     if (prev?.key !== pr.key) {
-      this.teardown();
+      // A pre-render's stylesheet is this PR's already.
+      this.teardown(this.preShown?.key === pr.key);
       this.sectionContainer = null;
       this.regions.reset();
       this.load(pr);
@@ -382,6 +418,7 @@ class Controller implements UiActions, EventListenerObject {
         if (data.result.partial && this.wantsFiles(pr)) this.load(pr);
         this.revealFromHash();
         this.render();
+        this.remember();
       })
       .catch((err: unknown) => {
         if (token !== this.loadToken) return;
@@ -538,7 +575,14 @@ class Controller implements UiActions, EventListenerObject {
       return;
     }
     const pruning = this.isPruning();
+    const snapshot = this.preShown?.key === this.pr.key ? this.preShown.value : null;
+    // What hides the diffs until the data is here: the pre-render, else the
+    // background script's stored result (e.g. when page storage was cleared).
+    const early = this.early?.key === this.pr.key ? this.early.result : null;
+    const preview = snapshot?.result.pruned.length ? snapshot.result : early;
     if (pruning && this.result) {
+      // The PR changed since it was stored: its counters show other numbers now.
+      if (snapshot && !sameTotals(snapshot, this.result)) this.countMarks.stop();
       // Only diff views have file diffs and a file tree to hide.
       this.styles.update(this.pr.isDiffView ? this.result : null, {
         diffMode: this.settings.diffMode,
@@ -551,14 +595,16 @@ class Controller implements UiActions, EventListenerObject {
       } else {
         this.collapser?.restore();
       }
-    } else if (this.status === 'loading' && this.isActive() && this.early?.key === this.pr.key) {
-      // Not GitHub's answer yet: only the diffs are hidden.
-      this.styles.update(this.pr.isDiffView ? this.early.result : null, {
-        diffMode: this.settings.diffMode,
-        treeMode: this.settings.treeMode,
+    } else if ((snapshot || preview) && this.status === 'loading' && this.isActive()) {
+      // Not the data yet: shown as last time, also on another tab of the PR.
+      if (preview) this.revealFromHash(preview);
+      this.styles.update(this.pr.isDiffView ? preview : null, {
+        diffMode: snapshot?.diffMode ?? this.settings.diffMode,
+        treeMode: snapshot?.treeMode ?? this.settings.treeMode,
         revealed: this.revealedSet(),
       });
     } else {
+      this.dropSnapshot();
       // Switched off (or refreshing): the same rules may apply again in a moment.
       this.styles.off();
       this.counts.restore();
@@ -593,6 +639,8 @@ class Controller implements UiActions, EventListenerObject {
     if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false, wait > 0)) {
       this.lastRescan = Date.now();
     }
+    // Patched counters show their pre-render's mark as text now.
+    this.countMarks.settle();
     this.searchAfterWait(!this.counts.isComplete(), wait);
   }
 
@@ -684,8 +732,8 @@ class Controller implements UiActions, EventListenerObject {
     return this.regions.diffList();
   }
 
-  private teardown(): void {
-    this.styles.clear();
+  private teardown(keepStyles = false): void {
+    if (!keepStyles) this.styles.clear();
     this.counts.restore();
     this.collapser?.restore();
     this.indicator?.unmount();
@@ -709,10 +757,104 @@ class Controller implements UiActions, EventListenerObject {
     this.error = undefined;
   }
 
+  // ---- Pre-rendering (see dom/prerender.ts) ------------------------------
+
+  /**
+   * Shows `pr` as it was pruned last time, from before its data is here.
+   * Until the settings are known, that is on the assumption that they are
+   * the same; once they are, a pre-render made for others is dropped.
+   */
+  private preRender(pr: PrRef | null, deferred = false): void {
+    if (pr && this.preShown?.key === pr.key) {
+      if (this.configured && !this.fits(pr, this.preShown.value)) {
+        this.dropSnapshot();
+        this.forgetPr(pr.key);
+      }
+      return;
+    }
+    this.dropSnapshot();
+    // Back to a PR whose data is here (e.g. from the back/forward cache). The
+    // root element is there at document_start (Chromium, Firefox), but checked.
+    if (!pr || !document.documentElement) return;
+    if (this.data?.key === pr.key && this.status === 'ready') return;
+    if (!pr.isDiffView && !deferred) {
+      // Without diffs, only counters are pre-rendered, and they are marked
+      // from requestAnimationFrame anyway: storage can wait for the next
+      // frame, by when the page itself has most likely opened it.
+      requestAnimationFrame(() => {
+        if (parsePrUrl(location.pathname)?.key === pr.key) this.preRender(pr, true);
+      });
+      return;
+    }
+    const store = pageStore();
+    const value = store && readSnapshot(store, pr.key);
+    if (!value) return;
+    if (this.configured && !this.fits(pr, value)) {
+      this.forgetPr(pr.key);
+      return;
+    }
+    this.preShown = { key: pr.key, value };
+    this.storedHash = { key: pr.key, hash: value.hash };
+    this.countMarks.start(value.result.original, value.result.kept);
+    // Rendering waits for the settings; once they are known it keeps this up. A
+    // link to a pruned file's diff shows it, which can't be done before then.
+    if (pr.isDiffView && !this.configured && !hashedFile(value.result)) {
+      this.styles.update(value.result, { diffMode: value.diffMode, treeMode: value.treeMode, revealed: new Set() });
+    }
+  }
+
+  /** Whether `snapshot` is what the settings would show on `pr`. */
+  private fits(pr: PrRef, snapshot: Snapshot): boolean {
+    return (
+      this.settings.enabled &&
+      !isRepoDisabled(this.settings, pr.repoKey) &&
+      !this.inactive.has(pr.key) &&
+      snapshot.diffMode === this.settings.diffMode &&
+      snapshot.treeMode === this.settings.treeMode
+    );
+  }
+
+  /** Done with the pre-render: the stylesheet is the real data's now, the counters' marks go. */
+  private dropSnapshot(): void {
+    this.preShown = null;
+    if (this.countMarks.active) this.countMarks.stop();
+  }
+
+  /** Stores what this PR looks like pruned for its next visit, or forgets it if it isn't. */
+  private remember(): void {
+    const pr = this.pr;
+    const result = this.result;
+    const store = pageStore();
+    if (!store || !pr || !result || this.status !== 'ready') return;
+    const { diffMode, treeMode } = this.settings;
+    const keep = this.isPruning() && this.isEnabledHere();
+    // Off the way of the page's own work; a few hundred bytes for most PRs.
+    idle(() => {
+      if (!keep) {
+        this.forgetPr(pr.key);
+        return;
+      }
+      // A summary (no diffs here) only stands in for the files kept last
+      // time if its numbers have changed: the counters must show the new ones.
+      const prev = result.partial ? readSnapshot(store, pr.key) : null;
+      const same = prev && sameTotals(prev, result) && prev.diffMode === diffMode && prev.treeMode === treeMode;
+      const raw = encode(same ? prev.result : result, diffMode, treeMode);
+      const hash = fingerprint(raw);
+      saveSnapshot(store, pr.key, raw, this.storedHash?.key === pr.key && this.storedHash.hash === hash);
+      this.storedHash = { key: pr.key, hash };
+    });
+  }
+
+  private forgetPr(key: string): void {
+    if (this.storedHash?.key === key) this.storedHash = null;
+    const store = pageStore();
+    if (store) clearSnapshots(store, (k) => k === key);
+  }
+
   /** Visiting `#diff-<digest>` of a pruned file (e.g. from a link) reveals it. */
-  private revealFromHash(): void {
-    const m = /^#diff-([0-9a-f]{64})/.exec(location.hash);
-    if (m && this.result?.pruned.some((f) => f.digest === m[1])) this.revealedSet().add(m[1]!);
+  private revealFromHash(result = this.result): void {
+    const digest = result && hashedFile(result);
+    if (digest) this.revealedSet().add(digest);
   }
 
   // ---- UiActions --------------------------------------------------------
@@ -723,6 +865,9 @@ class Controller implements UiActions, EventListenerObject {
     else this.inactive.add(this.pr.key);
     sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
+    // Switched off, it isn't pre-rendered next time either (a reload may come right away).
+    if (active) this.remember();
+    else this.forgetPr(this.pr.key);
   }
 
   setRevealed(digest: string, revealed: boolean): void {
@@ -800,6 +945,18 @@ function cache(map: Map<string, CacheEntry>, key: string, entry: CacheEntry): vo
     },
     entry.at + PR_DATA_TTL_MS + 1000 - Date.now(),
   );
+}
+
+/** The pruned file whose diff the URL points to (`#diff-<digest>`), if any. */
+function hashedFile(result: PruneResult): string | null {
+  const digest = /^#diff-([0-9a-f]{64})/.exec(location.hash)?.[1];
+  return digest && result.pruned.some((f) => f.digest === digest) ? digest : null;
+}
+
+/** Runs `task` when the page is idle (soon, at the latest). */
+function idle(task: () => void): void {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(task, { timeout: 500 });
+  else setTimeout(task, 0);
 }
 
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */

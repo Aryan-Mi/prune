@@ -303,7 +303,8 @@ function sameFiles(a: PruneResult, b: PruneResult): boolean {
  * the new UI) gets the selectors for both.
  */
 function isClassicUi(): boolean {
-  return !!document.getElementById('files')?.classList.contains('js-diff-container');
+  // Its class attribute rather than classList: no DOMTokenList in this script's world (see ui/indicator.ts).
+  return / js-diff-container /.test(` ${document.getElementById('files')?.className ?? ''} `);
 }
 
 /** Ids that need more than a backslash before some characters. */
