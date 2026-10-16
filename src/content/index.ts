@@ -829,10 +829,16 @@ class Controller implements UiActions, EventListenerObject {
       return;
     }
     this.dropSnapshot();
-    // Back to a PR whose data is here (e.g. from the back/forward cache). The
-    // root element is there at document_start (Chromium, Firefox), but checked.
+    // The root element is there at document_start (Chromium, Firefox), but checked.
     if (!pr || !document.documentElement) return;
-    if (this.data?.key === pr.key && this.status === 'ready' && !(this.data.result.partial && pr.isDiffView)) return;
+    const data = this.data?.key === pr.key && this.status === 'ready' ? this.data.result : null;
+    if (data && !(data.partial && pr.isDiffView)) {
+      // Its data is here already (it came with lookup's reply, or back from
+      // the back/forward cache): the counters show its numbers until patched,
+      // which only happens on the next check.
+      if (data.removed.files > 0 && this.fits(pr) && !this.counts.isComplete()) this.countMarks.start(data.original, data.kept);
+      return;
+    }
     if (!pr.isDiffView && !deferred) {
       // Without diffs, only counters are pre-rendered, and they are marked
       // from requestAnimationFrame anyway: storage can wait for the next
@@ -858,14 +864,13 @@ class Controller implements UiActions, EventListenerObject {
     }
   }
 
-  /** Whether `snapshot` is what the settings would show on `pr`. */
-  private fits(pr: PrRef, snapshot: Snapshot): boolean {
+  /** Whether PRune prunes `pr`, showing it as in `snapshot` (if given). */
+  private fits(pr: PrRef, snapshot?: Snapshot): boolean {
     return (
       this.settings.enabled &&
       !isRepoDisabled(this.settings, pr.repoKey) &&
       !this.inactive.has(pr.key) &&
-      snapshot.diffMode === this.settings.diffMode &&
-      snapshot.treeMode === this.settings.treeMode
+      (!snapshot || (snapshot.diffMode === this.settings.diffMode && snapshot.treeMode === this.settings.treeMode))
     );
   }
 
