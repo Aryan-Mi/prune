@@ -21,4 +21,6 @@ export interface UiActions {
   setAllRevealed(revealed: boolean): void;
   goToFile(file: PrFile): void;
   openSettings(): void;
+  /** The ✂ popover is about to show the pruned files: a summary won't do any more (see shared/prune.ts). */
+  needFiles(): void;
 }

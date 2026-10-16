@@ -1,6 +1,6 @@
 import { parseFileTree } from '../shared/filetree.ts';
 import type { Lookup, Message, RepoConfig } from '../shared/messages.ts';
-import { computePrune, type PruneResult } from '../shared/prune.ts';
+import { computePrune, summarize, type PruneResult } from '../shared/prune.ts';
 import { compileRules } from '../shared/rules.ts';
 import { loadRemoteCache, loadSettings, pageSettings, REMOTE_TTL_MS, rulesKey, type Settings } from '../shared/settings.ts';
 import { hasAllTotals, LIST_CAP } from '../shared/totals.ts';
@@ -44,7 +44,13 @@ export async function lookup(
     const rules = await rulesFingerprint(rulesKey(settings), repo, await remoteRules(settings));
     result = await loadResult(partition + msg.key, entry.etag, rules);
   }
-  return { settings: pageSettings(settings), inactive, etag: entry?.etag ?? null, repo, result };
+  return {
+    settings: pageSettings(settings),
+    inactive,
+    etag: entry?.etag ?? null,
+    repo,
+    result: result && (msg.files ? result : summarize(result)),
+  };
 }
 
 /**
@@ -62,7 +68,10 @@ export async function prune(msg: Extract<Message, { type: 'prune' }>, partition:
   const settings = await loadSettings();
   const remoteText = await remoteRules(settings);
   const rules = key === null ? '' : await rulesFingerprint(rulesKey(settings), msg.repo, remoteText);
-  if (msg.fileTree === null) return key !== null && msg.etag ? loadResult(key, msg.etag, rules) : null;
+  if (msg.fileTree === null) {
+    const result = key !== null && msg.etag ? await loadResult(key, msg.etag, rules) : null;
+    return result && (msg.files ? result : summarize(result));
+  }
 
   const compiled = compileRules(settings, { repoText: msg.repo.text, repoPath: msg.repo.path, remoteText });
   const files = parseFileTree(msg.fileTree);
@@ -75,5 +84,5 @@ export async function prune(msg: Extract<Message, { type: 'prune' }>, partition:
   if (key !== null && msg.etag && (!capped || hasAllTotals(msg.totals))) {
     saveResult(key, msg.etag, rules, result).catch(() => {});
   }
-  return result;
+  return msg.files ? result : summarize(result);
 }

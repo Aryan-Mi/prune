@@ -18,6 +18,7 @@ export interface PrunedFile extends PrFile {
 export interface PruneResult {
   /** How many files GitHub listed (it stops at 3000, see isCapped()). */
   listed: number;
+  /** In GitHub's order; `removed.files` of them. Empty in a summary (see `partial`). */
   pruned: PrunedFile[];
   /** Directories that contain only pruned files. */
   prunedDirs: string[];
@@ -36,6 +37,20 @@ export interface PruneResult {
   probes: string[];
   /** Path of the first file, to find the new UI's file tree (its rows have the path as id). */
   firstPath: string | null;
+  /**
+   * A summary (see summarize()): the numbers and sources only, without the
+   * pruned files, their directories and the probes.
+   */
+  partial?: true;
+}
+
+/**
+ * `result` without the files: all a page without diffs shows unless the ✂
+ * popover is opened. On a PR that prunes hundreds of vendored files, the page
+ * then keeps a few hundred bytes instead of tens of KB.
+ */
+export function summarize(result: PruneResult): PruneResult {
+  return { ...result, pruned: [], prunedDirs: [], probes: [], firstPath: null, partial: true };
 }
 
 /** How many digests from each end of the list go into `probes`. */

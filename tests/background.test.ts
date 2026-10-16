@@ -53,7 +53,7 @@ let onChanged: (changes: Record<string, { oldValue?: unknown; newValue?: unknown
 const { cachePartition, loadResult, rulesFingerprint, saveResult, stored } = await import('../src/background/cache.ts');
 const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
 const { lookup, prune } = await import('../src/background/pr.ts');
-const { computePrune } = await import('../src/shared/prune.ts');
+const { computePrune, summarize } = await import('../src/shared/prune.ts');
 const { compileRules } = await import('../src/shared/rules.ts');
 const { DEFAULT_SETTINGS, onConfigChanged } = await import('../src/shared/settings.ts');
 
@@ -146,9 +146,9 @@ describe('a PR page', () => {
         linesDeleted: 1,
       })),
     });
-  const ask = (key: string) => lookup({ type: 'lookup', key, repoKey: 'o/r' }, sender);
-  const send = (key: string, body: string | null, etag: string, totals: Partial<PrTotals> | null = null, repo = noRepo) =>
-    prune({ type: 'prune', key, repoKey: 'o/r', fileTree: body, etag, repo, repoFetched: true, totals }, '|');
+  const ask = (key: string, files = true) => lookup({ type: 'lookup', key, repoKey: 'o/r', files }, sender);
+  const send = (key: string, body: string | null, etag: string, totals: Partial<PrTotals> | null = null, repo = noRepo, files = true) =>
+    prune({ type: 'prune', key, repoKey: 'o/r', fileTree: body, etag, repo, repoFetched: true, totals, files }, '|');
 
   test('gets its stored result with the reply to lookup, for the current rules only', async () => {
     expect(await ask('o/r#1')).toMatchObject({ etag: null, result: null, repo: null });
@@ -164,6 +164,17 @@ describe('a PR page', () => {
     expect(await send('o/r#1', null, 'W/"a"')).toBeNull();
     local.delete('settings');
     expect((await send('o/r#1', null, 'W/"a"'))?.pruned).toHaveLength(5);
+  });
+
+  test('without diffs, it gets a summary', async () => {
+    const result = await send('o/r#6', fileTree(10), 'W/"f"', null, noRepo, false);
+    expect(result).toMatchObject({ pruned: [], prunedDirs: [], probes: [], partial: true, removed: { files: 5 } });
+    await Bun.sleep(0);
+    expect((await ask('o/r#6', false)).result).toEqual(result);
+    // Then the files, for the popover: they were stored all along.
+    const full = (await ask('o/r#6')).result;
+    expect(full?.pruned).toHaveLength(5);
+    expect(summarize(full!)).toEqual(result!);
   });
 
   test("without the repository's rules, lookup only says what is stored", async () => {

@@ -21,7 +21,13 @@ export type Message =
    * Content → background, as soon as a PR page opens: what the background
    * already has for this PR (see background/cache.ts). Also wakes it up.
    */
-  | { type: 'lookup'; key: string; repoKey: string }
+  | {
+      type: 'lookup';
+      key: string;
+      repoKey: string;
+      /** The page wants the pruned files; else it gets a summary (see shared/prune.ts summarize()). */
+      files: boolean;
+    }
   /**
    * Content → background: prune a PR's file_tree response (see shared/prune.ts).
    * `fileTree` is null when the response has the ETag of the list the
@@ -40,6 +46,8 @@ export type Message =
       repoFetched: boolean;
       /** GitHub's totals for the whole PR, along with a list that may be capped (see shared/totals.ts). */
       totals: Partial<PrTotals> | null;
+      /** As for `lookup`. */
+      files: boolean;
     };
 
 /** Reply to `lookup`. */

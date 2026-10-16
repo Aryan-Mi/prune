@@ -251,11 +251,11 @@ export class Popover implements EventListenerObject {
       const summary = el('div', 'summary');
       const counts = el('div');
       counts.append(
-        el('b', '', `${formatCount(result.pruned.length)} of ${formatCount(result.original.files)}`),
+        el('b', '', `${formatCount(result.removed.files)} of ${formatCount(result.original.files)}`),
         ` file${result.original.files === 1 ? '' : 's'} pruned`,
       );
       summary.append(counts);
-      if (result.pruned.length > 0) {
+      if (result.removed.files > 0) {
         const compare = el('div', 'compare');
         const was = statElement(result.original.additions, result.original.deletions);
         was.classList.add('was');
@@ -269,8 +269,11 @@ export class Popover implements EventListenerObject {
       }
       frag.append(summary);
 
-      if (result.pruned.length === 0) {
+      if (result.removed.files === 0) {
         frag.append(el('div', 'empty', 'No files in this pull request match your prune rules.'));
+      } else if (result.partial) {
+        // Asked for when the pointer reached the pill: here in a moment.
+        frag.append(el('div', 'empty', 'Loading pruned files…'));
       } else {
         // Rows are handled by the popover's click listener (onPopoverClick).
         const list = el('ul', 'list');

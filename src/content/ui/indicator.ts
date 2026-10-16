@@ -75,6 +75,7 @@ export class Indicator implements EventListenerObject {
       return;
     }
     this.queued.push([e.type, at]);
+    this.actions.needFiles();
     withPopover(({ Popover }) => {
       this.popover ??= new Popover(this, this.actions, this.state);
       for (const [type, at] of this.queued.splice(0)) this.popover.pillEvent(type, at);
@@ -99,7 +100,7 @@ export class Indicator implements EventListenerObject {
 
   render(state: ViewState): void {
     this.state = state;
-    const pruned = state.result?.pruned.length ?? 0;
+    const pruned = state.result?.removed.files ?? 0;
     const active = state.active && state.status === 'ready' && pruned > 0;
     let text: string;
     if (state.status === 'loading') text = 'PRune';

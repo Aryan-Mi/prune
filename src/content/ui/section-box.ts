@@ -72,7 +72,7 @@ export class SectionBox implements EventListenerObject {
     ui.title.setAttribute('aria-expanded', String(open));
     if (ui.shows !== result) {
       ui.shows = result;
-      ui.count.textContent = String(result.pruned.length);
+      ui.count.textContent = String(result.removed.files);
       const stat = statElement(result.removed.additions, result.removed.deletions);
       ui.stat.replaceWith(stat);
       ui.stat = stat;
