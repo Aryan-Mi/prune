@@ -3,7 +3,6 @@ import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
 import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
-import { applyTotals, isCapped } from '../shared/totals.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
@@ -36,14 +35,11 @@ interface PrData {
   repoConfigPath: string | null;
 }
 
-/** GitHub's responses for a PR, on their way to the background script. */
+/** GitHub's responses for a PR, and what the background script has for it. */
 interface PrResponses {
   /** The file_tree response, body unread. */
   fileTree: Response;
-  /** ETag of the file list the background script has a result for. */
-  storedEtag: string | null;
-  /** GitHub's totals, requested along with the list if it may well be capped (see isCapped()). */
-  totals: Promise<Partial<PrTotals> | null>;
+  stored: Lookup;
   repo: RepoConfig;
   repoFetched: boolean;
 }
@@ -375,7 +371,8 @@ class Controller implements UiActions {
    * 700 KB JSON response; the page never parses it or keeps any of it, and
    * gets back only the pruned files. If the background script already has a
    * result for this exact list (from an earlier visit; GitHub's ETag says so),
-   * the response isn't even read, let alone passed along.
+   * the response isn't even read, let alone passed along: the result usually
+   * came with the reply to `lookup` already.
    */
   private prData(pr: PrRef): Promise<PrData> {
     let entry = this.prCache.get(pr.key);
@@ -385,13 +382,19 @@ class Controller implements UiActions {
       const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
         const res = responses.fileTree;
         const etag = res.headers.get('ETag');
-        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
-        if (result) discard(res);
-        // Not stored (any more): send the list over.
-        else result = await prune(pr, responses, await res.text(), etag);
+        let result =
+          etag && etag === responses.stored.etag
+            ? (responses.stored.result ?? (await prune(pr, responses, null, etag, null)))
+            : null;
+        if (result) {
+          discard(res);
+        } else {
+          // Not stored (any more): send the list over, with GitHub's totals if it may be capped.
+          const totals = mayBeCapped(res) ? fetchPrTotals(pr).catch(() => null) : null;
+          result = await prune(pr, responses, await res.text(), etag, await totals);
+        }
         if (!result) throw new Error('Could not prune this pull request');
-        if (isCapped(result)) result = applyTotals(result, (await responses.totals) ?? (await fetchPrTotals(pr)));
-        return { key: pr.key, result, repoConfigPath: responses.repo.path };
+        return { key: pr.key, result: shareStrings(result), repoConfigPath: responses.repo.path };
       });
       entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
       promise.catch(() => this.prCache.delete(pr.key));
@@ -407,29 +410,19 @@ class Controller implements UiActions {
         settings: this.configured ? this.settings : pageSettings(await loadSettings()),
         inactive: [],
         etag: null,
-        capped: false,
         repo: null,
+        result: null,
       }),
     );
   }
 
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
   private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
-    const fileTree = fetchFileTree(pr);
-    const totals = Promise.all([fileTree, lookup])
-      .then(([res, { capped }]) => (capped || mayBeCapped(res) ? fetchPrTotals(pr) : null))
-      .catch(() => null);
     return Promise.all([
-      fileTree,
-      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+      fetchFileTree(pr),
       lookup,
-    ]).then(([fileTree, repo, stored]) => ({
-      fileTree,
-      storedEtag: stored.etag,
-      totals,
-      repo,
-      repoFetched: !stored.repo,
-    }));
+      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+    ]).then(([fileTree, stored, repo]) => ({ fileTree, stored, repo, repoFetched: !stored.repo }));
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -730,6 +723,7 @@ function prune(
   { repo, repoFetched }: PrResponses,
   fileTree: string | null,
   etag: string | null,
+  totals: Partial<PrTotals> | null,
 ): Promise<PruneResult | null> {
   return sendMessage<PruneResult | null>({
     type: 'prune',
@@ -739,7 +733,8 @@ function prune(
     etag,
     repo,
     repoFetched,
-  }).then((result) => result && shareStrings(result));
+    totals,
+  });
 }
 
 /**

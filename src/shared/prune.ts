@@ -23,7 +23,7 @@ export interface PruneResult {
   prunedDirs: string[];
   /**
    * Totals as GitHub reports them. The listed files' sums are the same
-   * numbers unless the list is capped (see applyTotals()).
+   * numbers unless the list is capped (see isCapped()).
    */
   original: PrTotals;
   /** Totals after pruning. */

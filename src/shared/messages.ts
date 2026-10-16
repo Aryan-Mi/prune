@@ -1,4 +1,5 @@
 import type { PrTotals } from './filetree.ts';
+import type { PruneResult } from './prune.ts';
 import type { PageSettings } from './settings.ts';
 
 /** A repository's `.pruneignore`, as found on its default branch. */
@@ -24,9 +25,9 @@ export type Message =
   /**
    * Content → background: prune a PR's file_tree response (see shared/prune.ts).
    * `fileTree` is null when the response has the ETag of the list the
-   * background script has a result for (`Lookup.etag`); if that result is
-   * gone by now or for other rules, it replies null and the content script
-   * sends the list.
+   * background script has a result for (`Lookup.etag`) but `lookup` couldn't
+   * hand it out; if that result is gone by now or for other rules, it replies
+   * null and the content script sends the list.
    */
   | {
       type: 'prune';
@@ -37,6 +38,8 @@ export type Message =
       repo: RepoConfig;
       /** `repo` was just fetched (not handed out by `lookup`), so it's worth keeping. */
       repoFetched: boolean;
+      /** GitHub's totals for the whole PR, along with a list that may be capped (see shared/totals.ts). */
+      totals: Partial<PrTotals> | null;
     };
 
 /** Reply to `lookup`. */
@@ -46,10 +49,13 @@ export interface Lookup {
   inactive: string[];
   /** ETag of the file list the stored result is for, to revalidate with. */
   etag: string | null;
-  /** That list was capped, so GitHub's totals will be needed as well. */
-  capped: boolean;
   /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */
   repo: RepoConfig | null;
+  /**
+   * The stored result itself, if it's for the current rules (and `repo` is
+   * known): the page's to use if GitHub's list still has `etag`.
+   */
+  result: PruneResult | null;
 }
 
 /** Reply to `get-status`, sent from the content script to the popup. */

@@ -1,7 +1,6 @@
 import { ext } from '../shared/browser.ts';
 import type { RepoConfig } from '../shared/messages.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isCapped } from '../shared/totals.ts';
 
 /**
  * Results the background script has computed before, kept in storage.session
@@ -19,7 +18,9 @@ import { isCapped } from '../shared/totals.ts';
  *
  * Only results are kept, not file lists: they hold just the pruned files, so
  * they're a fraction of the size. When the rules change, the list is sent or
- * fetched once more instead.
+ * fetched once more instead. A capped list's result includes GitHub's totals
+ * for the whole PR (see background/pr.ts), so a stored result is all a page
+ * needs.
  */
 
 /** Results kept at most; the oldest are dropped first. */
@@ -36,8 +37,6 @@ export interface Stored {
   etag: string;
   /** Fingerprint of the rules (see rulesFingerprint()). */
   rules: string;
-  /** The list was capped, so GitHub's totals are needed too. */
-  capped: boolean;
 }
 
 interface IndexEntry extends Stored {
@@ -70,7 +69,7 @@ const resultKey = (key: string) => `result:${key}`;
 /** What's stored for `key`, if anything. */
 export async function stored(key: string): Promise<Stored | null> {
   const entry = (await readIndex())[key];
-  return entry ? { etag: entry.etag, rules: entry.rules, capped: entry.capped } : null;
+  return entry ? { etag: entry.etag, rules: entry.rules } : null;
 }
 
 /** The stored result for `key`, if it was computed from the list GitHub sent with `etag`, with `rules`. */
@@ -91,7 +90,7 @@ export async function loadResult(key: string, etag: string, rules: string): Prom
 export function saveResult(key: string, etag: string, rules: string, result: PruneResult): Promise<void> {
   return serially(async () => {
     const idx = await readIndex();
-    idx[key] = { etag, rules, capped: isCapped(result), bytes: resultBytes(result), usedAt: Date.now() };
+    idx[key] = { etag, rules, bytes: resultBytes(result), usedAt: Date.now() };
     const evicted: string[] = [];
     const byAge = Object.keys(idx).sort((a, b) => idx[a]!.usedAt - idx[b]!.usedAt);
     let total = byAge.reduce((sum, k) => sum + idx[k]!.bytes, 0);
