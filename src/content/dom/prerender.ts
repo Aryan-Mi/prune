@@ -2,7 +2,6 @@ import type { PrTotals } from '../../shared/filetree.ts';
 import { parseCount, replaceCount } from '../../shared/format.ts';
 import type { PruneResult } from '../../shared/prune.ts';
 import type { DiffMode, TreeMode } from '../../shared/settings.ts';
-import { landmarks } from './counts.ts';
 
 /**
  * Pre-rendering: a PR seen before shows pruned from the first frame, before
@@ -25,11 +24,11 @@ import { landmarks } from './counts.ts';
  * totals gets a `data-prune-kept` attribute holding its pruned text, which a
  * static stylesheet shows in place of its own (`CountMarks`). Counters are
  * looked for from requestAnimationFrame callbacks, which run before every
- * frame is drawn, so the original numbers never show. A counter showing other numbers
- * means the PR changed since: then no counter is marked, and the stylesheet's
- * rules, keyed on file paths, stay right (only new files may show until the
- * data is here). Once the real data has patched a counter's text, its mark
- * goes.
+ * frame is drawn, so the original numbers never show. A counter showing
+ * other numbers means the PR changed since: then no counter is marked, and
+ * the stylesheet's rules, keyed on file paths, stay right (only new files may
+ * show until the data is here). Once the real data has patched a counter's
+ * text, its mark goes.
  */
 
 /** A PR's pre-render, as stored. */
@@ -284,14 +283,13 @@ const MARK_CSS = /* css */ `
   }
 `;
 
-const DELETIONS = '.fgColor-danger, .color-fg-danger';
+const DELETION_CLASSES = ['fgColor-danger', 'color-fg-danger'];
 const ADDITION_CLASS = /\b(?:fgColor-success|color-fg-success)\b/;
 const SCREEN_READER_CLASS = /\b(?:sr-only|VisuallyHidden)/;
 /** Numbers as GitHub renders them in any locale (see shared/format.ts). */
-const NUMBERS = /\d(?:[\d.,   ]*\d)?/g;
+const NUMBERS = /\d(?:[\d.,\u00a0\u202f ]*\d)?/g;
 /** A count GitHub caps, like "5,000+" on huge PRs. */
 const CAPPED = /\d\s*\+\)?$/;
-const COUNTERS = '#files_tab_counter, #prs-files-anchor-tab [data-component="CounterLabel"]';
 
 /**
  * Shows the header counters with the stored pruned totals until the real data
@@ -305,6 +303,8 @@ export class CountMarks {
   private frameId = 0;
   /** The header's diffstat and files counter have been marked (or found patched). */
   private foundCounters = 0;
+  /** The React header's navigation, which holds its diffstat. */
+  private headerNav: Element | null = null;
 
   /** Starts marking the counters that show `original`. */
   start(original: PrTotals, kept: PrTotals): void {
@@ -361,23 +361,34 @@ export class CountMarks {
   private markCounters(): boolean {
     const original = this.shownTotals!;
     const kept = this.prunedTotals!;
-    for (const place of landmarks()) {
-      for (const del of place.querySelectorAll(DELETIONS)) {
-        const add = del.previousElementSibling;
-        if (!add || !ADDITION_CLASS.test(add.getAttribute('class') ?? '')) continue;
-        const a = this.check(add, [original.additions], [kept.additions]);
-        const d = this.check(del, [original.deletions], [kept.deletions]);
-        if (a === null || d === null) return false;
-        const sr = del.nextElementSibling;
-        if (sr && SCREEN_READER_CLASS.test(sr.getAttribute('class') ?? '')) {
-          // "Lines changed: 751 additions & 1136 deletions": both numbers, or it is not ours to mark.
-          this.check(sr, [original.additions, original.deletions], [kept.additions, kept.deletions]);
+    // By GitHub's ids (as landmarks() in counts.ts), each frame until found:
+    // the header renders in pieces, over many frames.
+    const tab = document.getElementById('prs-files-anchor-tab');
+    if (!(this.foundCounters & 1)) {
+      // The classic header's diffstat, or the React header's, next to its tabs.
+      if (!this.headerNav?.isConnected) this.headerNav = tab?.closest('[data-component="PH_Navigation"]') ?? null;
+      for (const place of [document.getElementById('diffstat'), this.headerNav]) {
+        for (const name of place ? DELETION_CLASSES : []) {
+          for (const del of place!.getElementsByClassName(name)) {
+            const add = del.previousElementSibling;
+            if (!add || !ADDITION_CLASS.test(add.getAttribute('class') ?? '')) continue;
+            const a = this.check(add, [original.additions], [kept.additions]);
+            const d = this.check(del, [original.deletions], [kept.deletions]);
+            if (a === null || d === null) return false;
+            const sr = del.nextElementSibling;
+            if (sr && SCREEN_READER_CLASS.test(sr.getAttribute('class') ?? '')) {
+              // "Lines changed: 751 additions & 1136 deletions": both numbers, or it is not ours to mark.
+              this.check(sr, [original.additions, original.deletions], [kept.additions, kept.deletions]);
+            }
+            this.foundCounters |= 1;
+          }
         }
-        this.foundCounters |= 1;
       }
-      for (const counter of place.querySelectorAll(COUNTERS)) {
-        const c = this.check(counter, [original.files], [kept.files]);
-        if (c === null) return false;
+    }
+    if (!(this.foundCounters & 2)) {
+      const counter = document.getElementById('files_tab_counter') ?? tab?.querySelector('[data-component="CounterLabel"]');
+      if (counter) {
+        if (this.check(counter, [original.files], [kept.files]) === null) return false;
         const sr = counter.nextElementSibling;
         if (sr && SCREEN_READER_CLASS.test(sr.getAttribute('class') ?? '')) this.check(sr, [original.files], [kept.files]);
         this.foundCounters |= 2;
