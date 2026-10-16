@@ -60,8 +60,11 @@ export interface Lookup {
   /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */
   repo: RepoConfig | null;
   /**
-   * The stored result itself, if it's for the current rules (and `repo` is
-   * known): the page's to use if GitHub's list still has `etag`.
+   * The stored result, if computed with the current rules. If `repo` is
+   * null, that is with the repository's rules file as last seen, which may
+   * have changed since: then it only hides diffs until the page has fetched
+   * the file and asked with `prune`. Else it's the page's to use if GitHub's
+   * list still has `etag`.
    */
   result: PruneResult | null;
 }

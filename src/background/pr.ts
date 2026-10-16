@@ -37,11 +37,14 @@ export async function lookup(
     partition === null ? null : stored(partition + msg.key),
     partition === null ? null : storedRepoConfig(partition + msg.repoKey),
   ]);
-  const repo = settings.useRepoConfig ? repoConfig : NO_REPO_CONFIG;
+  // The repository's rules file as last seen, even if it's due to be fetched
+  // again: then the result only hides diffs until the fresh one is in (see Lookup).
+  const seen = settings.useRepoConfig ? repoConfig && { path: repoConfig.path, text: repoConfig.text } : NO_REPO_CONFIG;
+  const repo = settings.useRepoConfig ? (repoConfig?.fresh ? seen : null) : NO_REPO_CONFIG;
   let result: PruneResult | null = null;
-  // Without the repository's rules (not fetched lately), the page fetches them and asks with `prune`.
-  if (partition !== null && entry && repo) {
-    const rules = await rulesFingerprint(rulesKey(settings), repo, await remoteRules(settings));
+  // A page without diffs has no use for a result it can't keep.
+  if (partition !== null && entry && seen && (repo || msg.files)) {
+    const rules = await rulesFingerprint(rulesKey(settings), seen, await remoteRules(settings));
     result = await loadResult(partition + msg.key, entry.etag, rules);
   }
   return {

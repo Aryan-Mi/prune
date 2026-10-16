@@ -71,6 +71,12 @@ class Controller implements UiActions, EventListenerObject {
   private status: ViewStatus = 'loading';
   private error: string | undefined;
   private data: PrData | null = null;
+  /**
+   * The background script's result from an earlier visit while this PR's is
+   * loading: it hides the pruned diffs before GitHub renders them, when
+   * that's nearly free (see PruneStyles).
+   */
+  private early: { key: string; result: PruneResult } | null = null;
 
   private readonly prCache = new Map<string, CacheEntry>();
   /** Responses fetched while settings were still loading. */
@@ -369,6 +375,7 @@ class Controller implements UiActions, EventListenerObject {
       .then((data) => {
         if (token !== this.loadToken) return;
         this.data = data;
+        this.early = null;
         this.status = 'ready';
         this.error = undefined;
         // The popover was hovered meanwhile.
@@ -414,8 +421,9 @@ class Controller implements UiActions, EventListenerObject {
     const responses = await pending;
     const { fileTree: res, stored } = responses;
     const etag = res.headers.get('ETag');
-    let result =
-      etag && etag === stored.etag ? (stored.result ?? (await prune(pr, responses, null, etag, null))) : null;
+    // A result for the rules file as last seen (`repo` null) is checked against the one just fetched.
+    const ready = stored.repo && stored.result;
+    let result = etag && etag === stored.etag ? (ready ?? (await prune(pr, responses, null, etag, null))) : null;
     if (result) {
       discard(res);
     } else {
@@ -433,8 +441,8 @@ class Controller implements UiActions, EventListenerObject {
    */
   private async withFiles(pr: PrRef, data: PrData): Promise<PrData> {
     if (!data.result.partial) return data;
-    const { etag, result } = await this.lookup(pr, true);
-    if (result && etag === data.etag) return { ...data, result: shareStrings(result) };
+    const { etag, repo, result } = await this.lookup(pr, true);
+    if (result && repo && etag === data.etag) return { ...data, result: shareStrings(result) };
     return this.fromResponses(pr, this.fetchPr(pr, true));
   }
 
@@ -459,11 +467,18 @@ class Controller implements UiActions, EventListenerObject {
 
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
   private fetchPr(pr: PrRef, files: boolean, lookup = this.lookup(pr, files)): Promise<PrResponses> {
+    lookup.then(({ result }) => result && files && this.preview(pr.key, result)).catch(() => {});
     return Promise.all([
       fetchFileTree(pr),
       lookup,
       lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
     ]).then(([fileTree, stored, repo]) => ({ fileTree, stored, repo, repoFetched: !stored.repo, files }));
+  }
+
+  /** Applies a result from an earlier visit to `key` while its own is loading. */
+  private preview(key: string, result: PruneResult): void {
+    this.early = { key, result };
+    if (this.configured && this.pr?.key === key && this.status === 'loading') this.render();
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -536,6 +551,13 @@ class Controller implements UiActions, EventListenerObject {
       } else {
         this.collapser?.restore();
       }
+    } else if (this.status === 'loading' && this.isActive() && this.early?.key === this.pr.key) {
+      // Not GitHub's answer yet: only the diffs are hidden.
+      this.styles.update(this.pr.isDiffView ? this.early.result : null, {
+        diffMode: this.settings.diffMode,
+        treeMode: this.settings.treeMode,
+        revealed: this.revealedSet(),
+      });
     } else {
       // Switched off (or refreshing): the same rules may apply again in a moment.
       this.styles.off();
@@ -681,6 +703,7 @@ class Controller implements UiActions, EventListenerObject {
     this.section = null;
     this.sectionContainer = null;
     this.data = null;
+    this.early = null;
     this.prefetched = null;
     this.status = 'loading';
     this.error = undefined;

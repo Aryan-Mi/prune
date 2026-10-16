@@ -14,7 +14,8 @@ import type { PruneResult } from '../shared/prune.ts';
  * revisited PR's 700 KB response is never read in the page, passed along or
  * parsed (and the browser's HTTP cache has usually saved downloading it
  * again). A stored result is only ever used after GitHub answered a request
- * for it with the tab's cookies, so access is still checked.
+ * for it with the tab's cookies, so access is still checked; before that it
+ * only hides diffs in the page GitHub served for the PR (see Lookup.result).
  *
  * Only results are kept, not file lists: they hold just the pruned files, so
  * they're a fraction of the size. When the rules change, the list is sent or
@@ -136,6 +137,8 @@ export async function rulesFingerprint(rulesKey: string, repo: RepoConfig, remot
 /** How long a repository's .pruneignore is reused before it's fetched again. */
 export const REPO_CONFIG_TTL_MS = 10 * 60_000;
 const REPO_CONFIGS_KEY = 'repoConfigs';
+/** Rules files kept at most, the most recently fetched; real ones are a few KB. */
+const MAX_REPO_CONFIGS = 32;
 
 type RepoConfigs = Record<string, RepoConfig & { fetchedAt: number }>;
 
@@ -144,18 +147,23 @@ async function readRepoConfigs(): Promise<RepoConfigs> {
   return (stored[REPO_CONFIGS_KEY] as RepoConfigs | undefined) ?? {};
 }
 
-/** A recently fetched .pruneignore for the repository `key`, so tabs don't each fetch it. */
-export async function storedRepoConfig(key: string): Promise<RepoConfig | null> {
+/**
+ * The .pruneignore last fetched for the repository `key`. A `fresh` one is
+ * reused, so tabs don't each fetch it.
+ */
+export async function storedRepoConfig(key: string): Promise<(RepoConfig & { fresh: boolean }) | null> {
   const entry = (await readRepoConfigs())[key];
-  return entry && Date.now() - entry.fetchedAt < REPO_CONFIG_TTL_MS ? { path: entry.path, text: entry.text } : null;
+  return entry ? { path: entry.path, text: entry.text, fresh: Date.now() - entry.fetchedAt < REPO_CONFIG_TTL_MS } : null;
 }
 
 export function saveRepoConfig(key: string, config: RepoConfig): Promise<void> {
   return serially(async () => {
     const configs = await readRepoConfigs();
     const now = Date.now();
-    for (const k of Object.keys(configs)) if (now - configs[k]!.fetchedAt >= REPO_CONFIG_TTL_MS) delete configs[k];
     configs[key] = { path: config.path, text: config.text, fetchedAt: now };
+    // Kept past their reuse, to tell whether stored results are for them (see background/pr.ts lookup()).
+    const byAge = Object.keys(configs).sort((a, b) => configs[b]!.fetchedAt - configs[a]!.fetchedAt);
+    for (const k of byAge.slice(MAX_REPO_CONFIGS)) delete configs[k];
     await ext.storage.session.set({ [REPO_CONFIGS_KEY]: configs }).catch(() => {});
   });
 }

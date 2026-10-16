@@ -50,7 +50,8 @@ let onChanged: (changes: Record<string, { oldValue?: unknown; newValue?: unknown
     },
   },
 };
-const { cachePartition, loadResult, rulesFingerprint, saveResult, stored } = await import('../src/background/cache.ts');
+const { cachePartition, loadResult, REPO_CONFIG_TTL_MS, rulesFingerprint, saveRepoConfig, saveResult, stored, storedRepoConfig } =
+  await import('../src/background/cache.ts');
 const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
 const { lookup, prune } = await import('../src/background/pr.ts');
 const { computePrune, summarize } = await import('../src/shared/prune.ts');
@@ -98,6 +99,19 @@ test('the rules fingerprint changes with every input', async () => {
   expect(await rulesFingerprint('key', { ...repo, text: 'b/' }, null)).not.toBe(base);
   expect(await rulesFingerprint('key', { ...repo, path: '.github/pruneignore' }, null)).not.toBe(base);
   expect(await rulesFingerprint('key', repo, '')).not.toBe(base);
+});
+
+test('a repository rules file is kept past its reuse, for fingerprinting stored results', async () => {
+  const now = Date.now;
+  try {
+    await saveRepoConfig('|a/b', { path: '.pruneignore', text: 'a/' });
+    expect(await storedRepoConfig('|a/b')).toEqual({ path: '.pruneignore', text: 'a/', fresh: true });
+    Date.now = () => now() + REPO_CONFIG_TTL_MS;
+    expect(await storedRepoConfig('|a/b')).toEqual({ path: '.pruneignore', text: 'a/', fresh: false });
+    expect(await storedRepoConfig('|c/d')).toBeNull();
+  } finally {
+    Date.now = now;
+  }
 });
 
 test('cache keys are per container, and private windows get none', () => {
@@ -182,6 +196,21 @@ describe('a PR page', () => {
     await Bun.sleep(0);
     area.delete('repoConfigs');
     expect(await ask('o/r#2')).toMatchObject({ etag: 'W/"b"', result: null, repo: null });
+  });
+
+  test("with the repository's rules as last seen, the result comes for diffs, to be checked", async () => {
+    const repo = { path: '.pruneignore', text: 'src/' };
+    const result = await send('o/r#7', fileTree(4), 'W/"g"', null, repo);
+    await Bun.sleep(0);
+    const now = Date.now;
+    try {
+      Date.now = () => now() + REPO_CONFIG_TTL_MS;
+      // Due to be fetched again (`repo` null): the page only hides diffs with it until then.
+      expect(await ask('o/r#7')).toMatchObject({ etag: 'W/"g"', result, repo: null });
+      expect((await ask('o/r#7', false)).result).toBeNull();
+    } finally {
+      Date.now = now;
+    }
   });
 
   test("a capped list is stored with GitHub's totals only", async () => {
