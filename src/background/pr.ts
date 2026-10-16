@@ -2,7 +2,7 @@ import { parseFileTree } from '../shared/filetree.ts';
 import type { Lookup, Message, RepoConfig } from '../shared/messages.ts';
 import { computePrune, summarize, type PruneResult } from '../shared/prune.ts';
 import { compileRules } from '../shared/rules.ts';
-import { loadRemoteCache, loadSettings, pageSettings, REMOTE_TTL_MS, rulesKey, type Settings } from '../shared/settings.ts';
+import { isRepoDisabled, loadRemoteCache, loadSettings, pageSettings, REMOTE_TTL_MS, rulesKey, type Settings } from '../shared/settings.ts';
 import { hasAllTotals, LIST_CAP } from '../shared/totals.ts';
 import { cachePartition, loadResult, rulesFingerprint, saveRepoConfig, saveResult, stored, storedRepoConfig } from './cache.ts';
 import { refreshOnce } from './remote.ts';
@@ -48,11 +48,13 @@ export async function lookup(
     result = await loadResult(partition + msg.key, entry.etag, rules);
   }
   return {
-    settings: pageSettings(settings),
+    // Which other repositories PRune is off for is none of this page's business (see external.ts).
+    settings: { ...pageSettings(settings), disabledRepos: isRepoDisabled(settings, msg.repoKey) ? [msg.repoKey] : [] },
     inactive,
     etag: entry?.etag ?? null,
     repo,
     result: result && (msg.files ? result : summarize(result)),
+    incognito: !!sender.tab?.incognito,
   };
 }
 

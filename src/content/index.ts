@@ -1,8 +1,9 @@
 import { ext } from '../shared/browser.ts';
-import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
+import type { Lookup, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
+import { DEFAULT_SETTINGS, isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
+import { onMessage, send } from './channel.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
@@ -44,12 +45,15 @@ const GIVE_UP_MS = 2000;
 let storage: Storage | null | undefined;
 
 /**
- * Where pre-renders are kept; nothing is in private windows (see
+ * Where pre-renders are kept; nothing is written in private windows (see
  * dom/prerender.ts). Opened when first needed: in Chromium that takes 1–3 ms
  * if the page hasn't opened it yet (it does on every PR page, a little later).
+ * Chromium's main world can't tell a private window before the background
+ * script's reply does (`Lookup.incognito`), so there it's only read until then:
+ * nothing is there, as a private window's storage is its own.
  */
 function pageStore(): Storage | null {
-  if (storage === undefined) storage = ext.extension?.inIncognitoContext ? null : pageStorage();
+  if (storage === undefined) storage = !PRUNE_MAIN_WORLD && ext.extension?.inIncognitoContext ? null : pageStorage();
   return storage;
 }
 
@@ -83,10 +87,18 @@ interface CacheEntry {
 }
 
 class Controller implements UiActions, EventListenerObject {
-  /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
-  private settings!: PageSettings;
+  /**
+   * Loaded on the first PR page, so the rest of GitHub doesn't pay for it,
+   * then with every PR: `disabledRepos` only has the repositories of PRs
+   * looked up since settings last changed (see `lookup()`).
+   */
+  private settings: PageSettings = pageSettings(DEFAULT_SETTINGS);
   private configured = false;
+  /** Counts settings changes, so that replies to earlier lookups don't undo them. */
+  private settingsVersion = 0;
   private configuring = false;
+  /** In a private window: nothing is kept in page storage (see `pageStore()`). */
+  private incognito = false;
   private pr: PrRef | null = null;
   private href = '';
 
@@ -144,15 +156,16 @@ class Controller implements UiActions, EventListenerObject {
   private watching = false;
 
   start(): void {
-    ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
-      if (msg.type === 'get-status') {
-        sendResponse(this.tabStatus());
-      } else if (msg.type === 'set-active') {
-        this.setActive(msg.active);
-        sendResponse(this.tabStatus());
-      } else if (msg.type === 'config-changed') {
-        this.onConfigChanged(msg.settings, msg.rulesChanged);
-        sendResponse(null);
+    // From the popup and the background script (and, in Chromium, possibly the page: channel.ts).
+    onMessage((msg) => {
+      if (msg.type === 'get-status') return this.tabStatus();
+      if (msg.type === 'set-active') {
+        this.setActive(msg.active === true);
+        return this.tabStatus();
+      }
+      if (msg.type === 'config-changed') {
+        this.onConfigChanged();
+        return null;
       }
       return undefined;
     });
@@ -174,39 +187,39 @@ class Controller implements UiActions, EventListenerObject {
   }
 
   /**
-   * Takes the settings from the background script's reply to the first PR
-   * page's `lookup`, then handles the current page again. Changes are pushed
-   * from there too, so this script never reads extension storage.
+   * Waits for the background script's reply to the first PR page's `lookup`
+   * (which brings the settings), then handles the current page again. Changes
+   * are announced from there too, so this script never reads extension
+   * storage. If there was no reply, the next PR page tries again.
    */
   private configure(lookup: Promise<Lookup>): void {
     if (this.configuring) return;
     this.configuring = true;
     lookup
-      .then(({ settings, inactive }) => {
-        this.settings = settings;
+      .then(({ inactive }) => {
         for (const key of inactive) this.inactive.add(key);
         this.configured = true;
         this.href = '';
         this.check();
       })
-      .catch((err: unknown) => console.error('[PRune]', err));
+      .catch((err: unknown) => {
+        this.configuring = false;
+        console.error('[PRune]', err);
+      });
   }
 
-  private onConfigChanged(settings: PageSettings, rulesChanged: boolean): void {
+  /** Settings changed: looks up this PR again for them, and prunes it again in case the rules changed. */
+  private onConfigChanged(): void {
     if (!this.configured) return;
-    this.settings = settings;
+    this.settingsVersion++;
     // Rare enough to start over: every PR's pre-render was for the old settings.
     const store = pageStore();
     if (store) clearSnapshots(store);
     this.storedHash = null;
-    if (rulesChanged) {
-      // Results are only kept for the pruned files, so prune again from scratch.
-      this.prCache.clear();
-      if (this.pr) this.load(this.pr);
-      return;
-    }
-    this.render();
-    this.remember();
+    // Results are only kept for the pruned files. Other PRs' are dropped
+    // too, so that they are looked up again before they are shown.
+    this.prCache.clear();
+    if (this.pr) this.load(this.pr);
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -488,18 +501,47 @@ class Controller implements UiActions, EventListenerObject {
     return pr.isDiffView || this.filesFor === pr.key;
   }
 
-  /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
+  /**
+   * Asks the background script for settings and what it has stored for `pr`;
+   * also wakes it up. The settings in the reply are taken as they are, except
+   * that it only tells whether PRune is off in `pr`'s repository.
+   */
   private lookup(pr: PrRef, files: boolean): Promise<Lookup> {
-    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey, files }).catch(
-      async (): Promise<Lookup> => ({
-        // Not reachable right now: fetch everything, and read settings here.
-        settings: this.configured ? this.settings : pageSettings(await loadSettings()),
-        inactive: [],
-        etag: null,
-        repo: null,
-        result: null,
-      }),
+    const version = this.settingsVersion;
+    return send<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey, files }).then(
+      (reply) => {
+        if (reply.incognito) this.incognito = true;
+        if (version === this.settingsVersion) this.applySettings(pr, reply.settings);
+        return reply;
+      },
+      async (err: unknown): Promise<Lookup> => {
+        // Not reachable right now: fetch everything, with the settings at hand.
+        if (!this.configured) {
+          // Chromium: this script can't read them itself (world.d.ts).
+          if (PRUNE_MAIN_WORLD) throw err;
+          const settings = await loadSettings();
+          const disabledRepos = isRepoDisabled(settings, pr.repoKey) ? [pr.repoKey] : [];
+          this.applySettings(pr, { ...pageSettings(settings), disabledRepos });
+        }
+        return { settings: this.settings, inactive: [], etag: null, repo: null, result: null, incognito: this.incognito };
+      },
     );
+  }
+
+  private applySettings(pr: PrRef, settings: PageSettings): void {
+    const prev = this.settings;
+    const disabled = settings.disabledRepos.includes(pr.repoKey);
+    const changed =
+      prev.enabled !== settings.enabled ||
+      prev.diffMode !== settings.diffMode ||
+      prev.treeMode !== settings.treeMode ||
+      isRepoDisabled(prev, pr.repoKey) !== disabled;
+    if (!changed) return;
+    const disabledRepos = prev.disabledRepos.filter((repo) => repo !== pr.repoKey);
+    if (disabled) disabledRepos.push(pr.repoKey);
+    this.settings = { ...settings, disabledRepos };
+    // Shown right away, before the PR is pruned again.
+    if (this.configured && this.pr?.key === pr.key) this.render();
   }
 
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
@@ -572,6 +614,8 @@ class Controller implements UiActions, EventListenerObject {
   private paint(): void {
     if (!this.pr || !this.isEnabledHere()) {
       this.teardown();
+      // Off in this repository, as it turned out (Chromium: see `lookup()`).
+      this.dropSnapshot();
       return;
     }
     const pruning = this.isPruning();
@@ -583,8 +627,10 @@ class Controller implements UiActions, EventListenerObject {
     if (pruning && this.result) {
       // The PR changed since it was stored: its counters show other numbers now.
       if (snapshot && !sameTotals(snapshot, this.result)) this.countMarks.stop();
-      // Only diff views have file diffs and a file tree to hide.
-      this.styles.update(this.pr.isDiffView ? this.result : null, {
+      // Only diff views have file diffs and a file tree to hide. A summary
+      // has no files: until they're here (just navigated to the diffs), as last time.
+      const sheet = this.result.partial ? preview : this.result;
+      this.styles.update(this.pr.isDiffView ? sheet : null, {
         diffMode: this.settings.diffMode,
         treeMode: this.settings.treeMode,
         revealed: this.revealedSet(),
@@ -776,7 +822,7 @@ class Controller implements UiActions, EventListenerObject {
     // Back to a PR whose data is here (e.g. from the back/forward cache). The
     // root element is there at document_start (Chromium, Firefox), but checked.
     if (!pr || !document.documentElement) return;
-    if (this.data?.key === pr.key && this.status === 'ready') return;
+    if (this.data?.key === pr.key && this.status === 'ready' && !(this.data.result.partial && pr.isDiffView)) return;
     if (!pr.isDiffView && !deferred) {
       // Without diffs, only counters are pre-rendered, and they are marked
       // from requestAnimationFrame anyway: storage can wait for the next
@@ -825,7 +871,7 @@ class Controller implements UiActions, EventListenerObject {
     const pr = this.pr;
     const result = this.result;
     const store = pageStore();
-    if (!store || !pr || !result || this.status !== 'ready') return;
+    if (!store || this.incognito || !pr || !result || this.status !== 'ready') return;
     const { diffMode, treeMode } = this.settings;
     const keep = this.isPruning() && this.isEnabledHere();
     // Off the way of the page's own work; a few hundred bytes for most PRs.
@@ -863,7 +909,7 @@ class Controller implements UiActions, EventListenerObject {
     if (!this.pr) return;
     if (active) this.inactive.delete(this.pr.key);
     else this.inactive.add(this.pr.key);
-    sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
+    send({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
     // Switched off, it isn't pre-rendered next time either (a reload may come right away).
     if (active) this.remember();
@@ -905,7 +951,7 @@ class Controller implements UiActions, EventListenerObject {
   }
 
   openSettings(): void {
-    sendMessage({ type: 'open-options' }).catch(() => {});
+    send({ type: 'open-options' }).catch(() => {});
   }
 
   needFiles(): void {
@@ -971,7 +1017,7 @@ function prune(
   etag: string | null,
   totals: Partial<PrTotals> | null,
 ): Promise<PruneResult | null> {
-  return sendMessage<PruneResult | null>({
+  return send<PruneResult | null>({
     type: 'prune',
     key: pr.key,
     repoKey: pr.repoKey,
@@ -1006,13 +1052,6 @@ function discard(res: Response): void {
   } catch {
     // Only frees the connection's buffers early; the response is dropped anyway.
   }
-}
-
-/** Messages the background script; it replies `{ error }` when something failed. */
-async function sendMessage<T = unknown>(msg: Message): Promise<T> {
-  const reply = (await ext.runtime.sendMessage(msg)) as T | { error: string } | undefined;
-  if (reply && typeof reply === 'object' && 'error' in reply) throw new Error(reply.error);
-  return reply as T;
 }
 
 function filesTabPath(pr: PrRef): string {

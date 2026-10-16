@@ -1,6 +1,7 @@
 import { ext } from '../shared/browser.ts';
 import type { Message, TabStatus } from '../shared/messages.ts';
 import { loadSettings, saveSettings, type Settings } from '../shared/settings.ts';
+import { sendToTab } from '../shared/tabs.ts';
 
 const globalToggle = document.getElementById('global') as HTMLInputElement;
 const globalLabel = document.getElementById('global-label')!;
@@ -32,7 +33,7 @@ function stat(additions: number, deletions: number, className = ''): HTMLElement
 async function send(message: Message): Promise<TabStatus | null> {
   if (tabId === undefined) return null;
   try {
-    return ((await ext.tabs.sendMessage(tabId, message)) as TabStatus | undefined) ?? null;
+    return (await sendToTab<TabStatus>(tabId, message)) ?? null;
   } catch {
     return null; // Not a GitHub tab, or the content script isn't loaded yet.
   }

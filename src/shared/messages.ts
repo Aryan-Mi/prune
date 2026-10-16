@@ -2,6 +2,12 @@ import type { PrTotals } from './filetree.ts';
 import type { PruneResult } from './prune.ts';
 import type { PageSettings } from './settings.ts';
 
+/**
+ * Chromium build: the DOM event that carries messages to the content script,
+ * which runs in the page's own JS world there (see shared/tabs.ts).
+ */
+export const PAGE_EVENT = 'prune-extension-message';
+
 /** A repository's `.pruneignore`, as found on its default branch. */
 export interface RepoConfig {
   path: string | null;
@@ -13,8 +19,11 @@ export type Message =
   | { type: 'refresh-remote'; force?: boolean }
   | { type: 'get-status' }
   | { type: 'set-active'; active: boolean }
-  /** Background → content scripts that opened a PR: settings or the remote rules changed. */
-  | { type: 'config-changed'; settings: PageSettings; rulesChanged: boolean }
+  /**
+   * Background → content scripts that opened a PR: settings or the remote
+   * rules changed. They `lookup` the PR again for the new settings.
+   */
+  | { type: 'config-changed' }
   /** Content → background: the PRs switched off in this tab. */
   | { type: 'set-inactive'; keys: string[] }
   /**
@@ -52,6 +61,7 @@ export type Message =
 
 /** Reply to `lookup`. */
 export interface Lookup {
+  /** `disabledRepos` lists at most the PR's own repository: pages don't learn about others. */
   settings: PageSettings;
   /** PRs switched off in this tab. */
   inactive: string[];
@@ -67,6 +77,8 @@ export interface Lookup {
    * list still has `etag`.
    */
   result: PruneResult | null;
+  /** The tab is in a private window. */
+  incognito: boolean;
 }
 
 /** Reply to `get-status`, sent from the content script to the popup. */

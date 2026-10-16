@@ -180,6 +180,17 @@ describe('a PR page', () => {
     expect((await send('o/r#1', null, 'W/"a"'))?.pruned).toHaveLength(5);
   });
 
+  test('only learns whether PRune is off in its own repository', async () => {
+    local.set('settings', { disabledRepos: ['x/y', 'o/r'] });
+    try {
+      expect((await ask('o/r#1')).settings.disabledRepos).toEqual(['o/r']);
+      local.set('settings', { disabledRepos: ['x/y'] });
+      expect((await ask('o/r#1')).settings.disabledRepos).toEqual([]);
+    } finally {
+      local.delete('settings');
+    }
+  });
+
   test('without diffs, it gets a summary', async () => {
     const result = await send('o/r#6', fileTree(10), 'W/"f"', null, noRepo, false);
     expect(result).toMatchObject({ pruned: [], prunedDirs: [], probes: [], partial: true, removed: { files: 5 } });

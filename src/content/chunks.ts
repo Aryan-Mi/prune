@@ -5,9 +5,11 @@
  * are web-accessible resources and run in this content script's world, like
  * content.js when the loader imports it. Each is imported once.
  *
- * `browser` is `chrome` in the Chromium build; spelled out, Mozilla's linter
- * can tell these import the extension's own files.
+ * In Firefox, `browser.runtime.getURL()` is spelled out, so Mozilla's linter
+ * can tell these import the extension's own files. In Chromium the content
+ * script runs in the page's JS world, which has no `getURL()` (channel.ts).
  */
+import { BASE_URL } from './channel.ts';
 import type * as CollapseChunk from './dom/collapse.ts';
 import type * as PopoverChunk from './ui/popover.ts';
 import type * as SectionChunk from './ui/section-box.ts';
@@ -18,17 +20,29 @@ let collapse: Promise<typeof CollapseChunk> | null = null;
 
 /** The ✂ pill's popover: imported when the pointer reaches the pill, or it gets focus. */
 export function withPopover(use: (chunk: typeof PopoverChunk) => void): void {
-  run(() => (popover ??= import(browser.runtime.getURL('popover.js'))), use, () => (popover = null));
+  run(
+    () => (popover ??= import(PRUNE_MAIN_WORLD ? `${BASE_URL}popover.js` : browser.runtime.getURL('popover.js'))),
+    use,
+    () => (popover = null),
+  );
 }
 
 /** The "Pruned files" box: imported when its placeholder comes near the viewport. */
 export function withSection(use: (chunk: typeof SectionChunk) => void): void {
-  run(() => (section ??= import(browser.runtime.getURL('section.js'))), use, () => (section = null));
+  run(
+    () => (section ??= import(PRUNE_MAIN_WORLD ? `${BASE_URL}section.js` : browser.runtime.getURL('section.js'))),
+    use,
+    () => (section = null),
+  );
 }
 
 /** Collapse mode: imported only when that setting is on. */
 export function withCollapse(use: (chunk: typeof CollapseChunk) => void): void {
-  run(() => (collapse ??= import(browser.runtime.getURL('collapse.js'))), use, () => (collapse = null));
+  run(
+    () => (collapse ??= import(PRUNE_MAIN_WORLD ? `${BASE_URL}collapse.js` : browser.runtime.getURL('collapse.js'))),
+    use,
+    () => (collapse = null),
+  );
 }
 
 /**

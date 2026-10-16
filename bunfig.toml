@@ -1,0 +1,3 @@
+# Build-time constants (scripts/build.ts) for code run by Bun, e.g. the tests.
+[define]
+PRUNE_MAIN_WORLD = "false"
