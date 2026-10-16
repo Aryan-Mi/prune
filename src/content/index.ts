@@ -417,8 +417,18 @@ class Controller implements UiActions, EventListenerObject {
     if (this.data?.key !== pr.key) {
       this.status = 'loading';
       this.data = null;
+      // A revisit's data often comes within this task (GitHub's response
+      // fetched meanwhile, the stored result with lookup's reply): then the
+      // page is rendered once, not first as loading. Unless diffs are to be
+      // hidden as last time, and aren't yet (a sheet goes in before paint).
+      if (this.pr?.isDiffView && !this.styles.applied && (this.preShown?.key === pr.key || this.early?.key === pr.key)) {
+        this.render();
+      } else {
+        window.setTimeout(() => {
+          if (token === this.loadToken && this.status === 'loading') this.render();
+        });
+      }
     }
-    this.render();
 
     this.prData(pr, this.wantsFiles(pr))
       .then((data) => {

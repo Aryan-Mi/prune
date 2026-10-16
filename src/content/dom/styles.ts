@@ -179,6 +179,11 @@ export class PruneStyles {
     }
   }
 
+  /** Whether rules apply (for some result). */
+  get applied(): boolean {
+    return this.on;
+  }
+
   /** The elements marked as shown, so their replacement by GitHub can be watched for. */
   shownElements(): readonly Element[] {
     return this.marked;
