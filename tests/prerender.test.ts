@@ -3,6 +3,7 @@ import {
   clearSnapshots,
   decode,
   encode,
+  fingerprint,
   MAX_ENTRIES,
   MAX_ENTRY_CHARS,
   MAX_TOTAL_CHARS,
@@ -68,7 +69,8 @@ test('a stored pre-render reads back as the files and totals it was made from', 
   const back = decode(raw)!;
   expect(back.diffMode).toBe('hide');
   expect(back.treeMode).toBe('dim');
-  expect(back.raw).toBe(raw);
+  expect(back.hash).toBe(fingerprint(raw));
+  expect(fingerprint(raw)).not.toBe(fingerprint(encode(r, 'hide', 'hide')));
   expect(back.result.pruned.map((f) => [f.digest, f.path])).toEqual(r.pruned.map((f) => [f.digest, f.path]));
   expect(back.result.prunedDirs).toEqual(['vendor']);
   expect(back.result.original).toEqual(r.original);

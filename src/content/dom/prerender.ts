@@ -38,11 +38,11 @@ export interface Snapshot {
   treeMode: TreeMode;
   /**
    * The pruned files, their directories and the totals, enough to build the
-   * stylesheet and to compare with the real result (see `sameSnapshot()`).
+   * stylesheet and to compare with the real result (see `sameTotals()`).
    */
   result: PruneResult;
-  /** The stored text, to tell whether there is anything new to store. */
-  raw: string;
+  /** `fingerprint()` of the stored text, to tell whether there is anything new to store. */
+  hash: number;
 }
 
 const PREFIX = 'prune:';
@@ -125,7 +125,7 @@ export function decode(raw: string): Snapshot | null {
   return {
     diffMode: diffMode as DiffMode,
     treeMode: treeMode as TreeMode,
-    raw,
+    hash: fingerprint(raw),
     result: {
       listed: 0,
       pruned: paths.map((path, i) => ({
@@ -150,6 +150,13 @@ export function decode(raw: string): Snapshot | null {
       firstPath: null,
     },
   };
+}
+
+/** A hash of `text` (FNV-1a): what is stored can be compared without keeping it. */
+export function fingerprint(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+  return hash >>> 0;
 }
 
 function isStrings(value: unknown): value is string[] {

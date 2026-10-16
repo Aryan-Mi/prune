@@ -11,6 +11,7 @@ import {
   clearSnapshots,
   CountMarks,
   encode,
+  fingerprint,
   pageStorage,
   readSnapshot,
   sameTotals,
@@ -38,8 +39,17 @@ const INCOMPLETE_RESCAN_MS = 250;
  * only waited for in the landmarks (see `isSettled()`).
  */
 const GIVE_UP_MS = 2000;
-/** Where pre-renders are kept; nothing is in private windows (see dom/prerender.ts). */
-const storage = ext.extension?.inIncognitoContext ? null : pageStorage();
+let storage: Storage | null | undefined;
+
+/**
+ * Where pre-renders are kept; nothing is in private windows (see
+ * dom/prerender.ts). Opened when first needed: in Chromium that takes 1–3 ms
+ * if the page hasn't opened it yet (it does on every PR page, a little later).
+ */
+function pageStore(): Storage | null {
+  if (storage === undefined) storage = ext.extension?.inIncognitoContext ? null : pageStorage();
+  return storage;
+}
 
 interface PrData {
   /** The PR this data belongs to. */
@@ -91,8 +101,8 @@ class Controller implements UiActions {
   /** The stored pre-render of the PR shown, from the first frame until its data has settled in. */
   private preShown: { key: string; value: Snapshot } | null = null;
   private readonly countMarks = new CountMarks();
-  /** What is stored for the PR last shown, so the same isn't written again. */
-  private storedRaw: { key: string; raw: string } | null = null;
+  /** What is stored for the PR last shown (its fingerprint), so the same isn't written again. */
+  private storedHash: { key: string; hash: number } | null = null;
   /** Collapse mode's, imported when that setting is first on. */
   private collapser: Collapser | null = null;
   // Created on the first PR page, dropped when leaving PR pages.
@@ -169,8 +179,9 @@ class Controller implements UiActions {
     if (!this.configured) return;
     this.settings = settings;
     // Rare enough to start over: every PR's pre-render was for the old settings.
-    if (storage) clearSnapshots(storage);
-    this.storedRaw = null;
+    const store = pageStore();
+    if (store) clearSnapshots(store);
+    this.storedHash = null;
     if (rulesChanged) {
       // Results are only kept for the pruned files, so prune again from scratch.
       this.prCache.clear();
@@ -682,7 +693,7 @@ class Controller implements UiActions {
    * Until the settings are known, that is on the assumption that they are
    * the same; once they are, a pre-render made for others is dropped.
    */
-  private preRender(pr: PrRef | null): void {
+  private preRender(pr: PrRef | null, deferred = false): void {
     if (pr && this.preShown?.key === pr.key) {
       if (this.configured && !this.fits(pr, this.preShown.value)) {
         this.dropSnapshot();
@@ -693,16 +704,26 @@ class Controller implements UiActions {
     this.dropSnapshot();
     // Back to a PR whose data is here (e.g. from the back/forward cache). The
     // root element is there at document_start (Chromium, Firefox), but checked.
-    if (!pr || !storage || !document.documentElement) return;
+    if (!pr || !document.documentElement) return;
     if (this.data?.key === pr.key && this.status === 'ready') return;
-    const value = readSnapshot(storage, pr.key);
+    if (!pr.isDiffView && !deferred) {
+      // Without diffs, only counters are pre-rendered, and they are marked
+      // from requestAnimationFrame anyway: storage can wait for the next
+      // frame, by when the page itself has most likely opened it.
+      requestAnimationFrame(() => {
+        if (parsePrUrl(location.pathname)?.key === pr.key) this.preRender(pr, true);
+      });
+      return;
+    }
+    const store = pageStore();
+    const value = store && readSnapshot(store, pr.key);
     if (!value) return;
     if (this.configured && !this.fits(pr, value)) {
       this.forgetPr(pr.key);
       return;
     }
     this.preShown = { key: pr.key, value };
-    this.storedRaw = { key: pr.key, raw: value.raw };
+    this.storedHash = { key: pr.key, hash: value.hash };
     this.countMarks.start(value.result.original, value.result.kept);
     // Rendering waits for the settings; once they are known it keeps this up. A
     // link to a pruned file's diff shows it, which can't be done before then.
@@ -732,7 +753,8 @@ class Controller implements UiActions {
   private remember(): void {
     const pr = this.pr;
     const result = this.result;
-    if (!storage || !pr || !result || this.status !== 'ready') return;
+    const store = pageStore();
+    if (!store || !pr || !result || this.status !== 'ready') return;
     const { diffMode, treeMode } = this.settings;
     const keep = this.isPruning() && this.isEnabledHere();
     // Off the way of the page's own work; a few hundred bytes for most PRs.
@@ -742,14 +764,16 @@ class Controller implements UiActions {
         return;
       }
       const raw = encode(result, diffMode, treeMode);
-      saveSnapshot(storage, pr.key, raw, this.storedRaw?.key === pr.key && this.storedRaw.raw === raw);
-      this.storedRaw = { key: pr.key, raw };
+      const hash = fingerprint(raw);
+      saveSnapshot(store, pr.key, raw, this.storedHash?.key === pr.key && this.storedHash.hash === hash);
+      this.storedHash = { key: pr.key, hash };
     });
   }
 
   private forgetPr(key: string): void {
-    if (this.storedRaw?.key === key) this.storedRaw = null;
-    if (storage) clearSnapshots(storage, (k) => k === key);
+    if (this.storedHash?.key === key) this.storedHash = null;
+    const store = pageStore();
+    if (store) clearSnapshots(store, (k) => k === key);
   }
 
   /** Visiting `#diff-<digest>` of a pruned file (e.g. from a link) reveals it. */
