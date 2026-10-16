@@ -38,7 +38,9 @@ button { font: inherit; color: inherit; }
  * doesn't parse them.
  */
 export const LIST_CSS = /* css */ `
-.icon { display: inline-block; width: 16px; height: 16px; flex: none; background: currentColor; mask: var(--icon) center / contain no-repeat; }
+/* High-contrast modes would paint the background (the icon) in the background color. */
+.icon { display: inline-block; width: 16px; height: 16px; flex: none; background: currentColor; mask: var(--icon) center / contain no-repeat; forced-color-adjust: none; }
+@media (forced-colors: active) { .icon { background: CanvasText; } }
 .icon-scissors { --icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M6 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM5.6 5.2 14 12.5M5.6 10.8 14 3.5'/></svg>"); }
 .add { color: var(--p-success); font-weight: 600; }
 .del { color: var(--p-danger); font-weight: 600; }

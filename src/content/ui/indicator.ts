@@ -17,10 +17,11 @@ const PILL_CSS = /* css */ `
 .pill.active { color: var(--p-done); border-color: color-mix(in srgb, var(--p-done) 40%, transparent); background: var(--p-done-bg); }
 .pill.active:hover, .pill.active[aria-expanded="true"] { background: color-mix(in srgb, var(--p-done) 18%, transparent); }
 .pill::before {
-  content: ""; width: 14px; height: 14px; flex: none; background: currentColor;
+  content: ""; width: 14px; height: 14px; flex: none; background: currentColor; forced-color-adjust: none;
   mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M6 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM5.6 5.2 14 12.5M5.6 10.8 14 3.5'/></svg>");
 }
 .pill.loading::before { opacity: .5; }
+@media (forced-colors: active) { .pill::before { background: ButtonText; } }
 @media (prefers-reduced-motion: reduce) { .pill { transition: none; } }
 `;
 
