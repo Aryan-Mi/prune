@@ -7,6 +7,7 @@
  *   bun scripts/build.ts --package          # also zip into dist/*.zip
  *   bun scripts/build.ts --readable         # don't minify the content scripts
  */
+import { readFileSync } from 'node:fs';
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as esbuild from 'esbuild';
@@ -28,6 +29,17 @@ const readable = args.has('readable');
 const root = join(import.meta.dir, '..');
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
+
+/**
+ * Parts of the content script imported only when needed (src/content/chunks.ts),
+ * each an ES module of its own. Each is bundled with everything it uses, so it
+ * imports nothing (a few small helpers are in content.js too).
+ */
+const CONTENT_CHUNKS = {
+  popover: 'src/content/ui/popover.ts',
+  section: 'src/content/ui/section-box.ts',
+  collapse: 'src/content/dom/collapse.ts',
+};
 
 function manifest(target: Target) {
   const icons = Object.fromEntries(ICON_SIZES.map((s) => [s, `icons/icon-${s}.png`]));
@@ -57,12 +69,13 @@ function manifest(target: Target) {
         run_at: 'document_start',
       },
     ],
-    // For the loader's import(). Chromium serves it from a per-session random
-    // URL only, so pages can't probe for the extension; Firefox's
-    // moz-extension:// URLs are random per install anyway.
+    // For the loader's import() of content.js, and content.js's of its chunks.
+    // Chromium serves them from a per-session random URL only, so pages can't
+    // probe for the extension; Firefox's moz-extension:// URLs are random per
+    // install anyway.
     web_accessible_resources: [
       {
-        resources: ['content.js'],
+        resources: ['content.js', ...Object.keys(CONTENT_CHUNKS).map((name) => `${name}.js`)],
         matches: ['https://github.com/*'],
         ...(target === 'chrome' ? { use_dynamic_url: true } : {}),
       },
@@ -85,7 +98,15 @@ function manifest(target: Target) {
             gecko_android: { strict_min_version: '142.0' },
           },
         }
-      : { minimum_chrome_version: '120' }),
+      : {
+          minimum_chrome_version: '120',
+          // Chrome 148+ passes messages as structured clones, as Firefox always
+          // has, instead of as JSON: sending a 3000-file PR's file list takes
+          // the page ~0.3 ms instead of ~1.2 ms. Older versions ignore the key
+          // (with a warning on chrome://extensions). Messages stay plain data
+          // that both serializations treat alike.
+          message_serialization: 'structured_clone',
+        }),
   };
 }
 
@@ -116,6 +137,33 @@ const minifyCssTemplates: esbuild.Plugin = {
   },
 };
 
+/**
+ * Private class members of the content scripts that minifying may rename to a
+ * letter or two (esbuild's `mangleProps`; ~7% less script). Only names that are
+ * declared `private` and always used as `this.<name>`, and that appear nowhere
+ * outside src/content, so nothing else can depend on them: not the DOM (which
+ * these classes don't extend), not other bundles (popup, background, the
+ * content script's chunks, which only call public members) and not messages.
+ * Anything else that mentions the name, even a comment, keeps it as is.
+ */
+function privateMembers(): RegExp | undefined {
+  const read = (pattern: string) =>
+    [...new Bun.Glob(pattern).scanSync(root)].map((file) => readFileSync(join(root, file), 'utf8'));
+  const content = read('src/content/**/*.ts');
+  const elsewhere = read('src/{shared,background,popup,options}/**/*.ts').join('\n');
+  const declared = new Set(content.flatMap((src) => [...src.matchAll(/^\s+private (?:readonly )?(?:get )?(\w+)/gm)].map((m) => m[1]!)));
+  const names = [...declared].filter(
+    (name) =>
+      !new RegExp(`\\b${name}\\b`).test(elsewhere) &&
+      content.every((src) =>
+        [...src.matchAll(new RegExp(`(?<![\\w$])${name}(?![\\w$])`, 'g'))].every((m) =>
+          /(?:this\.|private (?:readonly )?(?:get )?)$/.test(src.slice(Math.max(0, m.index - 30), m.index)),
+        ),
+      ),
+  );
+  return names.length ? new RegExp(`^(?:${names.join('|')})$`) : undefined;
+}
+
 function esbuildOptions(target: Target): esbuild.BuildOptions[] {
   const common: esbuild.BuildOptions = {
     outdir: join(root, 'dist', target),
@@ -128,15 +176,29 @@ function esbuildOptions(target: Target): esbuild.BuildOptions[] {
     charset: 'ascii',
     logLevel: 'warning',
   };
+  const contentScript: esbuild.BuildOptions = {
+    ...common,
+    minify: !readable,
+    plugins: readable ? [] : [minifyCssTemplates],
+    mangleProps: readable ? undefined : privateMembers(),
+    define: {
+      // Chromium and Firefox restyle differently when stylesheets and attributes change (dom/styles.ts).
+      PRUNE_ENGINE: target === 'chrome' ? '"blink"' : '"gecko"',
+      ...(target === 'chrome' ? { browser: 'chrome' } : {}),
+    },
+  };
   return [
     // Loaded into github.com tabs, so they are minified (~40% smaller source
     // to keep in memory and parse). Rebuild unminified with --readable to
     // debug them.
     {
-      ...common,
+      ...contentScript,
       entryPoints: { content: join(root, 'src/content/index.ts') },
-      minify: !readable,
-      plugins: readable ? [] : [minifyCssTemplates],
+    },
+    {
+      ...contentScript,
+      entryPoints: Object.fromEntries(Object.entries(CONTENT_CHUNKS).map(([name, path]) => [name, join(root, path)])),
+      format: 'esm',
     },
     {
       ...common,

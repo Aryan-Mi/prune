@@ -6,7 +6,9 @@ import { PrFileList } from '../src/shared/filetree.ts';
 const area = new Map<string, unknown>();
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const sent: [number, unknown][] = [];
+let onChanged: (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void = () => {};
 (globalThis as { browser?: unknown }).browser = {
+  runtime: { getManifest: () => ({ version: '1.0.0' }) },
   tabs: {
     async sendMessage(id: number, msg: unknown) {
       if (id > 2) throw new Error('Could not establish connection. Receiving end does not exist.');
@@ -14,6 +16,11 @@ const sent: [number, unknown][] = [];
     },
   },
   storage: {
+    onChanged: {
+      addListener(listener: typeof onChanged) {
+        onChanged = listener;
+      },
+    },
     session: {
       async get(key: string) {
         return area.has(key) ? { [key]: copy(area.get(key)) } : {};
@@ -30,40 +37,53 @@ const sent: [number, unknown][] = [];
     },
   },
 };
-const { cachePartition, loadFileList, saveFileList, storedEtag } = await import('../src/background/cache.ts');
+const { cachePartition, loadResult, rulesFingerprint, saveResult, stored } = await import('../src/background/cache.ts');
 const { notifyTabs, openTab, setInactive } = await import('../src/background/tabs.ts');
+const { computePrune } = await import('../src/shared/prune.ts');
+const { compileRules } = await import('../src/shared/rules.ts');
+const { DEFAULT_SETTINGS, onConfigChanged } = await import('../src/shared/settings.ts');
 
 const list = (n: number) =>
   PrFileList.of(
     Array.from({ length: n }, (_, i) => ({
-      path: `dir/file-${i}.ts`,
+      path: i % 2 ? `dir/file-${i}.ts` : `dir/${i}/yarn.lock`,
       digest: Bun.CryptoHasher.hash('sha256', `dir/file-${i}.ts`, 'hex'),
       additions: i,
       deletions: 1,
       generated: i % 5 === 0,
     })),
   );
+const result = (n: number) => computePrune(list(n), {}, compileRules(DEFAULT_SETTINGS), DEFAULT_SETTINGS);
 
-test('a stored file list is only handed out for its ETag', async () => {
-  await saveFileList('|a/b#1', 'W/"one"', list(3));
-  expect(await storedEtag('|a/b#1')).toBe('W/"one"');
-  expect(await storedEtag('|a/b#2')).toBeNull();
-  expect(await loadFileList('|a/b#1', 'W/"two"')).toBeNull();
-  const loaded = await loadFileList('|a/b#1', 'W/"one"');
-  expect(loaded?.length).toBe(3);
-  expect(loaded?.get(2)).toEqual(list(3).get(2));
+test('a stored result is only handed out for its ETag and rules', async () => {
+  await saveResult('|a/b#1', 'W/"one"', 'rules', result(3));
+  expect(await stored('|a/b#1')).toEqual({ etag: 'W/"one"', rules: 'rules', capped: false });
+  expect(await stored('|a/b#2')).toBeNull();
+  expect(await loadResult('|a/b#1', 'W/"two"', 'rules')).toBeNull();
+  expect(await loadResult('|a/b#1', 'W/"one"', 'other rules')).toBeNull();
+  expect(await loadResult('|a/b#1', 'W/"one"', 'rules')).toEqual(result(3));
 
-  await saveFileList('|a/b#1', 'W/"two"', list(4));
-  expect(await loadFileList('|a/b#1', 'W/"one"')).toBeNull();
-  expect((await loadFileList('|a/b#1', 'W/"two"'))?.length).toBe(4);
+  await saveResult('|a/b#1', 'W/"two"', 'rules', result(4));
+  expect(await loadResult('|a/b#1', 'W/"one"', 'rules')).toBeNull();
+  expect((await loadResult('|a/b#1', 'W/"two"', 'rules'))?.listed).toBe(4);
 });
 
-test('the least recently used lists are dropped first', async () => {
-  for (let i = 0; i < 20; i++) await saveFileList(`|x/y#${i}`, `e${i}`, list(2));
-  expect(await storedEtag('|x/y#0')).toBeNull();
-  expect(await storedEtag('|x/y#19')).toBe('e19');
-  expect(area.has('fileList:|x/y#0')).toBe(false);
-  expect(area.has('fileList:|x/y#19')).toBe(true);
+test('the least recently used results are dropped first', async () => {
+  for (let i = 0; i < 40; i++) await saveResult(`|x/y#${i}`, `e${i}`, 'rules', result(2));
+  expect(await stored('|x/y#0')).toBeNull();
+  expect((await stored('|x/y#39'))?.etag).toBe('e39');
+  expect(area.has('result:|x/y#0')).toBe(false);
+  expect(area.has('result:|x/y#39')).toBe(true);
+});
+
+test('the rules fingerprint changes with every input', async () => {
+  const repo = { path: '.pruneignore', text: 'a/' };
+  const base = await rulesFingerprint('key', repo, null);
+  expect(await rulesFingerprint('key', { ...repo }, null)).toBe(base);
+  expect(await rulesFingerprint('other key', repo, null)).not.toBe(base);
+  expect(await rulesFingerprint('key', { ...repo, text: 'b/' }, null)).not.toBe(base);
+  expect(await rulesFingerprint('key', { ...repo, path: '.github/pruneignore' }, null)).not.toBe(base);
+  expect(await rulesFingerprint('key', repo, '')).not.toBe(base);
 });
 
 test('cache keys are per container, and private windows get none', () => {
@@ -88,4 +108,14 @@ test('tabs keep their switched-off PRs and get settings changes', async () => {
   await notifyTabs({ type: 'refresh-remote' });
   expect(sent.map(([id]) => id).sort()).toEqual([1, 2]);
   expect(Object.keys(area.get('tabs') as object).sort()).toEqual(['1', '2']);
+});
+
+test('settings changes tell whether files may be pruned differently', () => {
+  const calls: boolean[] = [];
+  onConfigChanged((rulesChanged) => calls.push(rulesChanged));
+  onChanged({ settings: { oldValue: { diffMode: 'hide' }, newValue: { diffMode: 'collapse' } } }, 'local');
+  onChanged({ settings: { newValue: { userPatterns: 'dist/' } } }, 'local');
+  onChanged({ remoteCache: { newValue: { url: 'https://example.com', text: '' } } }, 'local');
+  onChanged({ settings: { newValue: { userPatterns: 'dist/' } } }, 'session');
+  expect(calls).toEqual([false, true, true]);
 });

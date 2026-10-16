@@ -32,6 +32,93 @@ interface Diffstat {
   files: number | null;
 }
 
+/**
+ * Plays a React re-render of the header diffstat in the page, with GitHub's
+ * own numbers (`additions`, `deletions`): `write` writes them into the
+ * existing text nodes, `text` replaces those nodes, `element` replaces the
+ * whole diffstat. Resolves with the additions shown one microtask later
+ * (`write`: patching must happen before the page paints).
+ */
+async function rerenderHeader(page: Page, how: 'write' | 'text' | 'element', additions: number, deletions: number): Promise<string> {
+  return page.evaluate(
+    async ({ how, additions, deletions }) => {
+      const add = [...document.querySelectorAll('.fgColor-success, .color-fg-success')].find(
+        (e) =>
+          /^\s*\+[\d.,]+\s*$/.test(e.textContent ?? '') &&
+          /danger/.test(e.nextElementSibling?.className ?? '') &&
+          !e.closest('[id^="diff-"]:not(#diff-comparison-viewer-container)'),
+      )!;
+      const del = add.nextElementSibling!;
+      const numberText = (el: Element) => [...el.childNodes].find((n) => n.nodeType === 3 && /\d/.test(n.nodeValue ?? '')) as Text;
+      const github = (node: Text, value: number) => (node.nodeValue ?? '').replace(/[\d.,]+/, value.toLocaleString('en-US'));
+      if (how === 'element') {
+        const box = add.parentElement!;
+        const copy = box.cloneNode(true) as Element;
+        copy.querySelectorAll('[data-prune-ui]').forEach((e) => e.remove());
+        const [a, d] = [copy.children[[...box.children].indexOf(add)]!, copy.children[[...box.children].indexOf(del)]!];
+        numberText(a).nodeValue = github(numberText(a), additions);
+        numberText(d).nodeValue = github(numberText(d), deletions);
+        box.replaceWith(copy);
+        return '';
+      }
+      for (const [el, value] of [[add, additions], [del, deletions]] as const) {
+        const node = numberText(el);
+        if (how === 'write') node.nodeValue = github(node, value);
+        else node.replaceWith(document.createTextNode(github(node, value)));
+      }
+      await Promise.resolve();
+      return add.textContent ?? '';
+    },
+    { how, additions, deletions },
+  );
+}
+
+/** Re-renders the header in each way and checks PRune patches it again (and keeps the pill next to it). */
+async function rerenderHeaderChecks(page: Page, where: string, total: Diffstat, expected: Diffstat): Promise<void> {
+  const until = async (want: number | null) => {
+    let h = await readHeader(page);
+    for (let i = 0; i < 20 && h.additions !== want; i++) {
+      await page.waitForTimeout(100);
+      h = await readHeader(page);
+    }
+    return h;
+  };
+  const written = await rerenderHeader(page, 'write', total.additions!, total.deletions!);
+  check(
+    `${where}: GitHub's number written back is re-patched before the next paint`,
+    written.trim() === `+${expected.additions!.toLocaleString('en-US')}`,
+    `got ${written.trim()}`,
+  );
+  const counter = await page.evaluate(async (files) => {
+    const el = [...document.querySelectorAll('a[href$="/files"], a[href$="/changes"]')]
+      .map((a) => a.querySelector('.Counter, [data-component="CounterLabel"]'))
+      .find(Boolean)!;
+    const node = [...el.childNodes].find((n) => n.nodeType === 3 && /\d/.test(n.nodeValue ?? ''))!;
+    node.nodeValue = String(files);
+    await Promise.resolve();
+    return el.textContent;
+  }, total.files);
+  check(`${where}: same for the files counter`, Number(counter?.replace(/\D/g, '')) === expected.files, `got ${counter}`);
+  await rerenderHeader(page, 'text', total.additions!, total.deletions!);
+  const text = await until(expected.additions);
+  check(
+    `${where}: replaced text nodes are patched again`,
+    text.additions === expected.additions && text.deletions === expected.deletions,
+    `got +${text.additions} −${text.deletions}`,
+  );
+  await rerenderHeader(page, 'element', total.additions!, total.deletions!);
+  const element = await until(expected.additions);
+  const pill = await page.evaluate(() => {
+    const host = document.querySelector('[data-prune-ui="indicator"]');
+    return !!host?.isConnected && !host.classList.contains('floating') && !!host.parentElement?.querySelector('.fgColor-success, .color-fg-success');
+  });
+  check(
+    `${where}: a replaced diffstat is patched again, pill next to it`,
+    element.additions === expected.additions && element.deletions === expected.deletions && pill,
+    `got +${element.additions} −${element.deletions}, pill ${pill ? 'next to it' : 'elsewhere'}`,
+  );
+}
+
 async function readHeader(page: Page): Promise<Diffstat> {
   return page.evaluate(() => {
     const num = (t: string | null | undefined) => (t ? Number(t.replace(/\D/g, '')) : null);
@@ -107,8 +194,15 @@ try {
   );
   check('files changed counter excludes it', header.files === expected.files, `got ${header.files}, want ${expected.files}`);
 
-  await pill.hover();
+  // The popover is a chunk of its own: the focus event waits for it to be imported.
   const popover = page.locator('[data-prune-ui="indicator"] >> .popover');
+  await pill.focus();
+  const focused = await popover.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false);
+  check('focusing the pill opens the popover', focused);
+  await page.keyboard.press('Escape');
+  check('Escape closes it', await popover.waitFor({ state: 'hidden', timeout: 5_000 }).then(() => true, () => false));
+
+  await pill.hover();
   await popover.waitFor({ state: 'visible' });
   check('popover lists the lockfile', (await popover.textContent())?.includes('pnpm-lock.yaml') ?? false);
   await page.screenshot({ path: join(outDir, 'conversation-popover.png') });
@@ -131,6 +225,12 @@ try {
   const on = await readHeader(page);
   check('toggling on again re-applies', on.additions === expected.additions, `got +${on.additions}`);
   await page.mouse.move(10, 900);
+
+  // ---- React re-rendering the header ----------------------------------------------
+  // Once the page has settled, PRune only watches the header and its own nodes.
+  await page.waitForTimeout(1000);
+  const github = { ...total, files: tree.diffs.length };
+  await rerenderHeaderChecks(page, 'conversation tab', github, expected);
 
   // ---- Files tab (soft navigation via the tab link) -------------------------
   await page.locator(`a[href$="/pull/23648/files"]`).first().click();
@@ -168,7 +268,45 @@ try {
   await section.locator('.item .btn').first().click();
   await page.waitForTimeout(300);
   check('"Show diff" reveals the file in place', await lockDiff.isVisible());
+  check(
+    'its file tree row is back too',
+    await page.locator(`#file-tree-item-diff-${lock.pathDigest}`).isVisible(),
+  );
   await page.screenshot({ path: join(outDir, 'files-revealed.png') });
+  // GitHub re-rendering the diff (a new element, without PRune's mark) keeps it revealed.
+  await page.evaluate((id) => {
+    const diff = document.getElementById(id)!;
+    const copy = diff.cloneNode(true) as Element;
+    copy.removeAttribute('data-prune-show');
+    diff.replaceWith(copy);
+  }, `diff-${lock.pathDigest}`);
+  await page.waitForTimeout(500);
+  check('a re-rendered revealed diff stays revealed', await lockDiff.isVisible());
+  await section.locator('.item .btn').first().click();
+  await page.waitForTimeout(300);
+  check('"Hide diff" hides it again', !(await lockDiff.isVisible()));
+  // The per-PR switch on this tab.
+  await pill.hover();
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.waitForTimeout(300);
+  check('switching off on the files tab shows the diff', await lockDiff.isVisible());
+  await page.locator('[data-prune-ui="indicator"] >> .switch').click();
+  await page.waitForTimeout(300);
+  check('switching on hides it again', !(await lockDiff.isVisible()));
+  await page.mouse.move(10, 900);
+
+  // More content after the diffs (GitHub rendering more of them) → the section moves back to the end, before the next paint.
+  const sectionLast = await page.evaluate(async () => {
+    const host = document.querySelector('[data-prune-ui="section"]')!;
+    const more = document.createElement('div');
+    host.parentElement!.append(more);
+    await Promise.resolve();
+    const last = !host.nextElementSibling;
+    more.remove();
+    return last;
+  });
+  check('section moves back right away after diffs added after it', sectionLast);
+  await rerenderHeaderChecks(page, 'files tab', github, expected);
 
   // ---- Back to conversation (soft navigation) ---------------------------------
   await page.goBack();
@@ -177,15 +315,23 @@ try {
   const back = await readHeader(page);
   check('header stays pruned after navigating back', back.additions === expected.additions, `got +${back.additions}`);
 
-  // ---- Reloads: the background script's stored file list ------------------------
+  // ---- Reloads: the background script's stored results ----------------------------
   const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
   const storedKey = '|vitejs/vite#23648';
   type Ext = { chrome: typeof browser };
   const index = await worker.evaluate(async () => {
-    const stored = await (globalThis as unknown as Ext).chrome.storage.session.get('fileLists');
-    return stored.fileLists as Record<string, unknown> | undefined;
+    const stored = await (globalThis as unknown as Ext).chrome.storage.session.get('results');
+    return stored.results as Record<string, unknown> | undefined;
   });
-  check('background script stored the file list', !!index?.[storedKey], Object.keys(index ?? {}).join(', '));
+  check('background script stored the result', !!index?.[storedKey], Object.keys(index ?? {}).join(', '));
+  // Below 3000 files the list adds up to GitHub's totals: the page requests only the list.
+  // (GitHub's own UI requests diffstat and tab_counts too, with headers of its own.)
+  const pageRequests: string[] = [];
+  page.on('request', (req) => {
+    if (req.url().includes('/page_data/') && !req.headers()['github-verified-fetch']) {
+      pageRequests.push(new URL(req.url()).pathname);
+    }
+  });
   const reloadedHeader = async () => {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
@@ -201,15 +347,17 @@ try {
     return h;
   };
   const reloaded = await reloadedHeader();
-  check('pruned on reload (stored list)', reloaded.additions === expected.additions, `got +${reloaded.additions}`);
-  // The list is gone but its ETag is still indexed: the content script must send it after all.
+  check('pruned on reload (stored result)', reloaded.additions === expected.additions, `got +${reloaded.additions}`);
+  const ours = pageRequests.filter((p) => /\/page_data\/(file_tree|diffstat|tab_counts)$/.test(p));
+  check('the page requests the file list only', ours.join() === '/vitejs/vite/pull/23648/page_data/file_tree', ours.join(', '));
+  // The result is gone but its ETag is still indexed: the content script must send the list after all.
   await worker.evaluate(
-    (key) => (globalThis as unknown as Ext).chrome.storage.session.remove(`fileList:${key}`),
+    (key) => (globalThis as unknown as Ext).chrome.storage.session.remove(`result:${key}`),
     storedKey,
   );
   const refetched = await reloadedHeader();
   check(
-    'pruned on reload when the stored list is gone',
+    'pruned on reload when the stored result is gone',
     refetched.additions === expected.additions,
     `got +${refetched.additions}`,
   );
@@ -244,6 +392,24 @@ try {
   await setSettings({});
   const repruned = await readUntil(expected.additions);
   check('…and back', repruned.additions === expected.additions, `got +${repruned.additions}`);
+
+  // ---- Collapse mode (a chunk of its own, imported when the setting is on) ------
+  await setSettings({ diffMode: 'collapse' });
+  await page.goto(`${PR}/files`, { waitUntil: 'domcontentloaded' });
+  await lockDiff.waitFor({ state: 'attached', timeout: 30_000 });
+  const collapsed = await page
+    .waitForFunction(
+      (id) =>
+        !!document
+          .getElementById(id)
+          ?.querySelector('button[aria-label="Expand file"], .file-header .js-details-target[aria-expanded="false"]'),
+      `diff-${lock.pathDigest}`,
+      { timeout: 20_000 },
+    )
+    .then(() => true, () => false);
+  check('collapse mode collapses the pruned diff', collapsed && (await lockDiff.isVisible()));
+  check('…and lists no "Pruned files" section', (await page.locator('[data-prune-ui="section"]').count()) === 0);
+  await setSettings({});
 
   // ---- Repo page → PR (soft navigation) ----------------------------------------
   // PRune does nothing PR-specific on other pages (no settings, no UI) until a

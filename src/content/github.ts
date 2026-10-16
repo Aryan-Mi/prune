@@ -1,5 +1,6 @@
 import { REPO_CONFIG_PATHS } from '../shared/defaults.ts';
 import type { PrTotals } from '../shared/filetree.ts';
+import { LIST_CAP } from '../shared/totals.ts';
 import { PR_PATH } from './route.ts';
 import type { RepoConfig } from '../shared/messages.ts';
 
@@ -62,6 +63,18 @@ export async function fetchFileTree(pr: PrRef, signal?: AbortSignal): Promise<Re
 }
 
 /**
+ * Whether a file_tree response may hold a capped list, judging by its size
+ * alone: each listed file takes at least ~150 bytes, and its digest (64 hex
+ * digits) alone at least 32 compressed. So GitHub's totals can be requested
+ * before the list has been pruned, and needn't be for most PRs.
+ */
+export function mayBeCapped(res: Response): boolean {
+  const length = Number(res.headers.get('Content-Length'));
+  if (!length) return true;
+  return length >= LIST_CAP * (res.headers.get('Content-Encoding') ? 32 : 150);
+}
+
+/**
  * Looks for a `.pruneignore` in the repository at the PR's base commit.
  * `/raw/` redirects to raw.githubusercontent.com (CORS-enabled, and with a
  * short-lived token for private repos), so this also works without an API token.
@@ -96,9 +109,9 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null
 }
 
 /**
- * The exact totals GitHub shows in the PR header. These are fetched separately
- * because the file list is capped at 3000 entries; for huge PRs the header
- * totals cannot be derived from the list.
+ * The exact totals GitHub shows in the PR header. Only needed when the file
+ * list is capped (see shared/totals.ts): for huge PRs the header totals
+ * cannot be derived from the list.
  */
 export async function fetchPrTotals(pr: PrRef, signal?: AbortSignal): Promise<Partial<PrTotals>> {
   const [diffstat, counts] = await Promise.all([

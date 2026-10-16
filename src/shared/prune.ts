@@ -1,3 +1,4 @@
+import { keptTotals } from './totals.ts';
 import { parseFileTree, type PrFile, type PrFileList, type PrTotals } from './filetree.ts';
 import { compileRules, type CompiledRules, type RuleInputs } from './rules.ts';
 import type { Settings } from './settings.ts';
@@ -11,16 +12,19 @@ export interface PrunedFile extends PrFile {
 
 /**
  * Everything the content script needs about a PR, computed in the background
- * script and sent over as plain JSON. It holds the pruned files only, never
+ * script and sent over as plain data. It holds the pruned files only, never
  * the whole file list.
  */
 export interface PruneResult {
-  /** How many files GitHub listed (it stops at 3000). */
+  /** How many files GitHub listed (it stops at 3000, see isCapped()). */
   listed: number;
   pruned: PrunedFile[];
   /** Directories that contain only pruned files. */
   prunedDirs: string[];
-  /** Totals as GitHub reports them. */
+  /**
+   * Totals as GitHub reports them. The listed files' sums are the same
+   * numbers unless the list is capped (see applyTotals()).
+   */
   original: PrTotals;
   /** Totals after pruning. */
   kept: PrTotals;
@@ -89,11 +93,7 @@ export function computePrune(
     deletions: githubTotals.deletions ?? sum.deletions,
     files: githubTotals.files ?? sum.files,
   };
-  const kept: PrTotals = {
-    additions: Math.max(0, original.additions - removed.additions),
-    deletions: Math.max(0, original.deletions - removed.deletions),
-    files: Math.max(0, original.files - removed.files),
-  };
+  const kept = keptTotals(original, removed);
 
   const probes: string[] = [];
   for (let i = 0; i < files.length; i++) {

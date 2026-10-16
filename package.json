@@ -20,7 +20,8 @@
     "check": "bun run typecheck && bun run test && bun run build && bun run lint:firefox",
     "bench": "bun run build:chrome && node bench/live.ts",
     "bench:memory": "node --expose-gc bench/memory.ts",
-    "bench:latency": "bun run build:chrome && node bench/latency.ts"
+    "bench:latency": "bun run build:chrome && node bench/latency.ts",
+    "bench:compile": "bun run build:chrome && node bench/compile.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

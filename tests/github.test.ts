@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parsePrUrl } from '../src/content/github.ts';
+import { mayBeCapped, parsePrUrl } from '../src/content/github.ts';
 import { PR_MATCH } from '../src/content/route.ts';
 import { PrFileList } from '../src/shared/filetree.ts';
 
@@ -54,16 +54,13 @@ test('PrFileList stores files column-wise and gives them back', () => {
   expect([list.get(0), list.get(1)]).toEqual(files);
 });
 
-test('PrFileList survives a round trip through extension storage', () => {
-  const files = ['a.ts', 'dist/b.js', 'c.md'].map((path, i) => ({
-    path,
-    digest: Bun.CryptoHasher.hash('sha256', path, 'hex'),
-    additions: i * 7,
-    deletions: i + 2,
-    generated: i === 1,
-  }));
-  const stored = JSON.parse(JSON.stringify(PrFileList.of(files).toStored()));
-  const list = PrFileList.fromStored(stored);
-  expect(list.length).toBe(3);
-  expect([0, 1, 2].map((i) => list.get(i))).toEqual(files);
+test('only big file_tree responses may hold a capped list', () => {
+  const res = (headers: Record<string, string>) => new Response(null, { headers });
+  // nodejs/node#65161: 3000 files, 171 KB gzipped.
+  expect(mayBeCapped(res({ 'Content-Length': '171206', 'Content-Encoding': 'gzip' }))).toBe(true);
+  expect(mayBeCapped(res({ 'Content-Length': '2630', 'Content-Encoding': 'gzip' }))).toBe(false);
+  expect(mayBeCapped(res({ 'Content-Length': '9353' }))).toBe(false);
+  expect(mayBeCapped(res({ 'Content-Length': '694000' }))).toBe(true);
+  // Size unknown: better ask.
+  expect(mayBeCapped(res({}))).toBe(true);
 });
