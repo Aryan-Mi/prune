@@ -1,5 +1,12 @@
 import type { PrTotals } from './filetree.ts';
+import type { PruneResult } from './prune.ts';
 import type { PageSettings } from './settings.ts';
+
+/**
+ * Chromium build: the DOM event that carries messages to the content script,
+ * which runs in the page's own JS world there (see shared/tabs.ts).
+ */
+export const PAGE_EVENT = 'prune-extension-message';
 
 /** A repository's `.pruneignore`, as found on its default branch. */
 export interface RepoConfig {
@@ -12,21 +19,30 @@ export type Message =
   | { type: 'refresh-remote'; force?: boolean }
   | { type: 'get-status' }
   | { type: 'set-active'; active: boolean }
-  /** Background → content scripts that opened a PR: settings or the remote rules changed. */
-  | { type: 'config-changed'; settings: PageSettings; rulesChanged: boolean }
+  /**
+   * Background → content scripts that opened a PR: settings or the remote
+   * rules changed. They `lookup` the PR again for the new settings.
+   */
+  | { type: 'config-changed' }
   /** Content → background: the PRs switched off in this tab. */
   | { type: 'set-inactive'; keys: string[] }
   /**
    * Content → background, as soon as a PR page opens: what the background
    * already has for this PR (see background/cache.ts). Also wakes it up.
    */
-  | { type: 'lookup'; key: string; repoKey: string }
+  | {
+      type: 'lookup';
+      key: string;
+      repoKey: string;
+      /** The page wants the pruned files; else it gets a summary (see shared/prune.ts summarize()). */
+      files: boolean;
+    }
   /**
    * Content → background: prune a PR's file_tree response (see shared/prune.ts).
    * `fileTree` is null when the response has the ETag of the list the
-   * background script has a result for (`Lookup.etag`); if that result is
-   * gone by now or for other rules, it replies null and the content script
-   * sends the list.
+   * background script has a result for (`Lookup.etag`) but `lookup` couldn't
+   * hand it out; if that result is gone by now or for other rules, it replies
+   * null and the content script sends the list.
    */
   | {
       type: 'prune';
@@ -37,19 +53,32 @@ export type Message =
       repo: RepoConfig;
       /** `repo` was just fetched (not handed out by `lookup`), so it's worth keeping. */
       repoFetched: boolean;
+      /** GitHub's totals for the whole PR, along with a list that may be capped (see shared/totals.ts). */
+      totals: Partial<PrTotals> | null;
+      /** As for `lookup`. */
+      files: boolean;
     };
 
 /** Reply to `lookup`. */
 export interface Lookup {
+  /** `disabledRepos` lists at most the PR's own repository: pages don't learn about others. */
   settings: PageSettings;
   /** PRs switched off in this tab. */
   inactive: string[];
   /** ETag of the file list the stored result is for, to revalidate with. */
   etag: string | null;
-  /** That list was capped, so GitHub's totals will be needed as well. */
-  capped: boolean;
   /** The repository's recently fetched `.pruneignore`; null if it should be fetched. */
   repo: RepoConfig | null;
+  /**
+   * The stored result, if computed with the current rules. If `repo` is
+   * null, that is with the repository's rules file as last seen, which may
+   * have changed since: then it only hides diffs until the page has fetched
+   * the file and asked with `prune`. Else it's the page's to use if GitHub's
+   * list still has `etag`.
+   */
+  result: PruneResult | null;
+  /** The tab is in a private window. */
+  incognito: boolean;
 }
 
 /** Reply to `get-status`, sent from the content script to the popup. */

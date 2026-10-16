@@ -34,14 +34,14 @@ export class PrunedSection {
   constructor(actions: UiActions) {
     this.actions = actions;
     this.host = document.createElement('div');
-    this.host.dataset.pruneUi = 'section';
+    this.host.setAttribute('data-prune-ui', 'section');
   }
 
   /** Appends the section after the diff list; a no-op when already in place. */
   mount(container: Element): void {
     if (this.host.parentElement !== container || container.lastElementChild !== this.host) {
       container.append(this.host);
-      this.movedAt = performance.now();
+      this.movedAt = Date.now();
     }
     if (!this.near && !this.nearby) {
       this.nearby = new IntersectionObserver(
@@ -62,7 +62,7 @@ export class PrunedSection {
 
   /** Near the viewport: builds the box once it has stayed in place (moving it far away cancels this). */
   private whenSettled(): void {
-    const wait = this.movedAt + SETTLE_MS - performance.now();
+    const wait = this.movedAt + SETTLE_MS - Date.now();
     if (wait > 0) {
       this.nearTimer = window.setTimeout(() => this.whenSettled(), wait);
       return;

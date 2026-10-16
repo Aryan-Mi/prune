@@ -14,18 +14,13 @@ import type { PruneResult } from './prune.ts';
 export const LIST_CAP = 3000;
 
 /** Whether GitHub may have left files out of the list, so that its own totals are needed. */
-export function isCapped(result: PruneResult): boolean {
+export function isCapped(result: Pick<PruneResult, 'listed'>): boolean {
   return result.listed >= LIST_CAP;
 }
 
-/** `result` with GitHub's totals for the whole PR (for capped lists). */
-export function applyTotals(result: PruneResult, totals: Partial<PrTotals>): PruneResult {
-  const original: PrTotals = {
-    additions: totals.additions ?? result.original.additions,
-    deletions: totals.deletions ?? result.original.deletions,
-    files: totals.files ?? result.original.files,
-  };
-  return { ...result, original, kept: keptTotals(original, result.removed) };
+/** Whether `totals` holds all of GitHub's numbers. */
+export function hasAllTotals(totals: Partial<PrTotals> | null | undefined): totals is PrTotals {
+  return totals?.additions !== undefined && totals.deletions !== undefined && totals.files !== undefined;
 }
 
 export function keptTotals(original: PrTotals, removed: PrTotals): PrTotals {

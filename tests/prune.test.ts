@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { PrFileList, type PrFile } from '../src/shared/filetree.ts';
-import { buildCss } from '../src/content/dom/styles.ts';
-import { applyTotals, isCapped } from '../src/shared/totals.ts';
+import { buildCss, lazyCss } from '../src/content/dom/styles.ts';
+import { hasAllTotals, isCapped } from '../src/shared/totals.ts';
 import { computePrune, prunePr } from '../src/shared/prune.ts';
 import { compileRules } from '../src/shared/rules.ts';
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from '../src/shared/settings.ts';
@@ -40,13 +40,13 @@ describe('computePrune', () => {
     expect(r.kept).toEqual({ additions: 9250, deletions: 3870, files: 3997 });
   });
 
-  test('GitHub totals can be applied afterwards, and are only needed for capped lists', () => {
+  test('GitHub totals are only needed for capped lists', () => {
     const r = computePrune(files, {}, compileRules(settings), settings);
     expect(isCapped(r)).toBe(false);
     expect(isCapped({ ...r, listed: 3000 })).toBe(true);
-    const totals = { additions: 10_000, deletions: 5_000, files: 4000 };
-    expect(applyTotals(r, totals)).toEqual(computePrune(files, totals, compileRules(settings), settings));
-    expect(applyTotals(r, {})).toEqual(r);
+    expect(hasAllTotals({ additions: 0, deletions: 0, files: 0 })).toBe(true);
+    expect(hasAllTotals({ additions: 1, deletions: 2 })).toBe(false);
+    expect(hasAllTotals(null)).toBe(false);
   });
 
   test('repo rules, remote rules and personal rules layer in order', () => {
@@ -149,5 +149,31 @@ describe('buildCss', () => {
     expect(css).toContain('li#weird\\"name\\.lock[role="treeitem"]');
     expect(css).toContain('li#\\31 \\ a\\/-2\\.lock[role="treeitem"]');
     expect(css).toContain('li#\\31 \\ a[role="treeitem"]');
+  });
+});
+
+describe('lazyCss', () => {
+  const many = PrFileList.of(Array.from({ length: 20 }, (_, i) => file(`vendor/${i}.js`, 1, 1)));
+  const r = computePrune(many, {}, compileRules(normalizeSettings({ userPatterns: 'vendor/' })), settings);
+
+  test('renders pruned diffs lazily: the classic body, or the whole new UI diff', () => {
+    const [first] = lazyCss(r);
+    const digest = r.pruned[0]!.digest;
+    expect(first).toContain(`#diff-${digest} > .js-file-content`);
+    expect(first).toContain(`#diff-${digest}:not(.js-file)`);
+    expect(first).toContain('content-visibility: auto');
+    expect(first).not.toContain('html[');
+    // A page known to be classic only gets the body's.
+    expect(lazyCss(r, false, true)[0]).not.toContain(':not(.js-file)');
+  });
+
+  test('groups of eight settle one by one, each behind its token in Chromium', () => {
+    const groups = lazyCss(r, true);
+    expect(r.pruned).toHaveLength(20);
+    expect(groups).toHaveLength(3);
+    expect(groups[2]!.match(/#diff-/g)).toHaveLength(2 * 4);
+    groups.forEach((css, i) => {
+      for (const selector of css.split('\n')) expect(selector.startsWith(`html[data-prune-lazy~="${i}"] #diff-`)).toBe(true);
+    });
   });
 });

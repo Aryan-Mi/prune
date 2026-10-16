@@ -1,12 +1,24 @@
 import { ext } from '../shared/browser.ts';
-import type { Lookup, Message, RepoConfig, TabStatus } from '../shared/messages.ts';
+import type { Lookup, RepoConfig, TabStatus } from '../shared/messages.ts';
 import type { PrFile, PrTotals } from '../shared/filetree.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
-import { applyTotals, isCapped } from '../shared/totals.ts';
+import { DEFAULT_SETTINGS, isRepoDisabled, loadSettings, pageSettings, type PageSettings } from '../shared/settings.ts';
+import { onMessage, send } from './channel.ts';
 import { withCollapse } from './chunks.ts';
 import type { Collapser } from './dom/collapse.ts';
 import { CountPatcher, landmarks } from './dom/counts.ts';
+import {
+  clearSnapshots,
+  CountMarks,
+  decode,
+  encode,
+  pageStorage,
+  readSnapshot,
+  sameTotals,
+  saveSnapshot,
+  storedText,
+  type Snapshot,
+} from './dom/prerender.ts';
 import { BulkRegions } from './dom/regions.ts';
 import { PruneStyles } from './dom/styles.ts';
 import { fetchFileTree, fetchPrTotals, fetchRepoConfig, mayBeCapped, parsePrUrl, type PrRef } from './github.ts';
@@ -14,6 +26,9 @@ import { Indicator } from './ui/indicator.ts';
 import { onNavigation } from './route.ts';
 import { PrunedSection } from './ui/section.ts';
 import type { UiActions, ViewState, ViewStatus } from './ui/types.ts';
+
+// Times are Date.now(): precise enough for these, and performance.now() would
+// have the page set up the Performance interface in this script's world.
 
 /** A PR's result is reused across tab switches for this long before refetching. */
 const PR_DATA_TTL_MS = 60_000;
@@ -28,46 +43,83 @@ const INCOMPLETE_RESCAN_MS = 250;
  * only waited for in the landmarks (see `isSettled()`).
  */
 const GIVE_UP_MS = 2000;
+let storage: Storage | null | undefined;
+
+/**
+ * Where pre-renders are kept; nothing is written in private windows (see
+ * dom/prerender.ts). Opened when first needed: in Chromium that takes 1–3 ms
+ * if the page hasn't opened it yet (it does on every PR page, a little later).
+ * Chromium's main world can't tell a private window before the background
+ * script's reply does (`Lookup.incognito`), so there it's only read until then:
+ * nothing is there, as a private window's storage is its own.
+ */
+function pageStore(): Storage | null {
+  if (storage === undefined) storage = !PRUNE_MAIN_WORLD && ext.extension?.inIncognitoContext ? null : pageStorage();
+  return storage;
+}
 
 interface PrData {
   /** The PR this data belongs to. */
   key: string;
+  /** A summary unless the page wanted the pruned files (see `wantsFiles()`). */
   result: PruneResult;
+  /** ETag of the file list `result` is for. */
+  etag: string | null;
   repoConfigPath: string | null;
 }
 
-/** GitHub's responses for a PR, on their way to the background script. */
+/** GitHub's responses for a PR, and what the background script has for it. */
 interface PrResponses {
   /** The file_tree response, body unread. */
   fileTree: Response;
-  /** ETag of the file list the background script has a result for. */
-  storedEtag: string | null;
-  /** GitHub's totals, requested along with the list if it may well be capped (see isCapped()). */
-  totals: Promise<Partial<PrTotals> | null>;
+  stored: Lookup;
   repo: RepoConfig;
   repoFetched: boolean;
+  /** Asked for the pruned files (see Lookup). */
+  files: boolean;
 }
 
-interface CacheEntry<T> {
-  promise: Promise<T>;
+interface CacheEntry {
+  promise: Promise<PrData>;
+  /** When GitHub's list was fetched. */
   at: number;
+  /** With the pruned files. */
+  files: boolean;
 }
 
-class Controller implements UiActions {
-  /** Loaded on the first PR page, so the rest of GitHub doesn't pay for it. */
-  private settings!: PageSettings;
+class Controller implements UiActions, EventListenerObject {
+  /**
+   * Loaded on the first PR page, so the rest of GitHub doesn't pay for it,
+   * then with every PR: `disabledRepos` only has the repositories of PRs
+   * looked up since settings last changed (see `lookup()`).
+   */
+  private settings: PageSettings = pageSettings(DEFAULT_SETTINGS);
   private configured = false;
+  /** Counts settings changes, so that replies to earlier lookups don't undo them. */
+  private settingsVersion = 0;
   private configuring = false;
+  /** In a private window: nothing is kept in page storage (see `pageStore()`). */
+  private incognito = false;
   private pr: PrRef | null = null;
   private href = '';
 
   private status: ViewStatus = 'loading';
   private error: string | undefined;
   private data: PrData | null = null;
+  /**
+   * The background script's result from an earlier visit while this PR's is
+   * loading: it hides the pruned diffs before GitHub renders them, when
+   * that's nearly free (see PruneStyles).
+   */
+  private early: { key: string; result: PruneResult } | null = null;
 
-  private readonly prCache = new Map<string, CacheEntry<PrData>>();
+  private readonly prCache = new Map<string, CacheEntry>();
   /** Responses fetched while settings were still loading. */
-  private prefetched: { key: string; promise: Promise<PrResponses> } | null = null;
+  private prefetched: { key: string; files: boolean; promise: Promise<PrResponses> } | null = null;
+  /** The PR whose pruned files the ✂ popover or its diffs are about to show. */
+  private filesFor = '';
+  /** "Files changed" links that ask for the pruned files once the pointer reaches them. */
+  private readonly armed = new WeakSet<Element>();
   private readonly revealed = new Map<string, Set<string>>();
   /** PRs switched off in this tab; the background script keeps them across page loads. */
   private readonly inactive = new Set<string>();
@@ -76,6 +128,9 @@ class Controller implements UiActions {
   private readonly styles = new PruneStyles();
   private readonly counts = new CountPatcher(() => this.scheduleCheck());
   private readonly regions = new BulkRegions();
+  /** The stored pre-render of the PR shown, from the first frame until its data has settled in. */
+  private preShown: { key: string; value: Snapshot } | null = null;
+  private readonly countMarks = new CountMarks();
   /** Collapse mode's, imported when that setting is first on. */
   private collapser: Collapser | null = null;
   // Created on the first PR page, dropped when leaving PR pages.
@@ -100,15 +155,16 @@ class Controller implements UiActions {
   private watching = false;
 
   start(): void {
-    ext.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
-      if (msg.type === 'get-status') {
-        sendResponse(this.tabStatus());
-      } else if (msg.type === 'set-active') {
-        this.setActive(msg.active);
-        sendResponse(this.tabStatus());
-      } else if (msg.type === 'config-changed') {
-        this.onConfigChanged(msg.settings, msg.rulesChanged);
-        sendResponse(null);
+    // From the popup and the background script (and, in Chromium, possibly the page: channel.ts).
+    onMessage((msg) => {
+      if (msg.type === 'get-status') return this.tabStatus();
+      if (msg.type === 'set-active') {
+        this.setActive(msg.active === true);
+        return this.tabStatus();
+      }
+      if (msg.type === 'config-changed') {
+        this.onConfigChanged();
+        return null;
       }
       return undefined;
     });
@@ -126,38 +182,44 @@ class Controller implements UiActions {
       if (document.visibilityState === 'visible') this.scheduleCheck();
     });
     window.addEventListener('load', () => this.scheduleCheck());
+    // At document_start: the only time its sheet is free (see CountMarks).
+    if (document.readyState === 'loading') this.countMarks.prepare();
     this.check();
   }
 
   /**
-   * Takes the settings from the background script's reply to the first PR
-   * page's `lookup`, then handles the current page again. Changes are pushed
-   * from there too, so this script never reads extension storage.
+   * Waits for the background script's reply to the first PR page's `lookup`
+   * (which brings the settings), then handles the current page again. Changes
+   * are announced from there too, so this script never reads extension
+   * storage. If there was no reply, the next PR page tries again.
    */
   private configure(lookup: Promise<Lookup>): void {
     if (this.configuring) return;
     this.configuring = true;
     lookup
-      .then(({ settings, inactive }) => {
-        this.settings = settings;
+      .then(({ inactive }) => {
         for (const key of inactive) this.inactive.add(key);
         this.configured = true;
         this.href = '';
         this.check();
       })
-      .catch((err: unknown) => console.error('[PRune]', err));
+      .catch((err: unknown) => {
+        this.configuring = false;
+        console.error('[PRune]', err);
+      });
   }
 
-  private onConfigChanged(settings: PageSettings, rulesChanged: boolean): void {
+  /** Settings changed: looks up this PR again for them, and prunes it again in case the rules changed. */
+  private onConfigChanged(): void {
     if (!this.configured) return;
-    this.settings = settings;
-    if (rulesChanged) {
-      // Results are only kept for the pruned files, so prune again from scratch.
-      this.prCache.clear();
-      if (this.pr) this.load(this.pr);
-      return;
-    }
-    this.render();
+    this.settingsVersion++;
+    // Rare enough to start over: every PR's pre-render was for the old settings.
+    const store = pageStore();
+    if (store) clearSnapshots(store);
+    // Results are only kept for the pruned files. Other PRs' are dropped
+    // too, so that they are looked up again before they are shown.
+    this.prCache.clear();
+    if (this.pr) this.load(this.pr);
   }
 
   // ---- Scheduling -------------------------------------------------------
@@ -187,6 +249,8 @@ class Controller implements UiActions {
       this.watching = true;
       // The diff list may have grown since it was last looked for.
       this.placeSection(true);
+      // What the counters show is up to their patches from now on.
+      this.dropSnapshot();
     }
     const subtrees = this.counts.places();
     // Collapse mode clicks each pruned file's toggle once its diff shows up.
@@ -230,7 +294,7 @@ class Controller implements UiActions {
   /** How much longer what is missing from the header landmarks is expected to render there (see GIVE_UP_MS). */
   private waitFor(): number {
     if (document.readyState !== 'complete') return GIVE_UP_MS;
-    return Math.max(0, this.shownAt + GIVE_UP_MS - performance.now());
+    return Math.max(0, this.shownAt + GIVE_UP_MS - Date.now());
   }
 
   private onMutations(records: MutationRecord[]): void {
@@ -255,7 +319,7 @@ class Controller implements UiActions {
     // Until the check runs, further mutations would change nothing, so don't
     // have the browser record them (a big PR page makes thousands).
     this.observer.disconnect();
-    const wait = Math.max(0, CHECK_INTERVAL_MS - (performance.now() - this.lastCheck));
+    const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - this.lastCheck));
     this.checkTimer = window.setTimeout(() => {
       this.checkTimer = 0;
       this.check();
@@ -268,7 +332,7 @@ class Controller implements UiActions {
    * pieces), one trailing retry is queued so the last mutation is never missed.
    */
   private check(fromMutation = true): void {
-    this.lastCheck = performance.now();
+    this.lastCheck = Date.now();
     // PRune's own changes needn't be observed; track() picks up from here.
     this.observer.disconnect();
     this.checking = true;
@@ -290,7 +354,7 @@ class Controller implements UiActions {
     if (this.isPruning()) {
       const intact = this.counts.isIntact();
       if (!intact || !this.counts.isComplete()) {
-        const since = performance.now() - this.lastRescan;
+        const since = Date.now() - this.lastRescan;
         // apply() searches the whole page only if the likely places come up short.
         if (!intact || since >= INCOMPLETE_RESCAN_MS) this.applyCounts();
         else if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
@@ -306,26 +370,29 @@ class Controller implements UiActions {
   }
 
   private onLocationChange(pr: PrRef | null): void {
+    this.preRender(pr);
     if (pr && !this.configured) {
       // GitHub's responses don't depend on settings: fetch them while they load.
-      const lookup = this.lookup(pr);
-      this.prefetched = { key: pr.key, promise: this.fetchPr(pr, lookup) };
+      const files = this.wantsFiles(pr);
+      const lookup = this.lookup(pr, files);
+      this.prefetched = { key: pr.key, files, promise: this.fetchPr(pr, files, lookup) };
       this.prefetched.promise.catch(() => {});
       this.configure(lookup);
       return;
     }
     const prev = this.pr;
     this.pr = pr;
-    this.shownAt = performance.now();
+    this.shownAt = Date.now();
     if (!pr) {
       this.teardown();
       this.release();
       return;
     }
     // Counters found where expected are enough at first; the whole-page search for more can wait.
-    this.lastRescan = performance.now();
+    this.lastRescan = Date.now();
     if (prev?.key !== pr.key) {
-      this.teardown();
+      // A pre-render's stylesheet is this PR's already.
+      this.teardown(this.preShown?.key === pr.key);
       this.sectionContainer = null;
       this.regions.reset();
       this.load(pr);
@@ -334,8 +401,9 @@ class Controller implements UiActions {
       this.counts.rescope();
       this.sectionContainer = null;
       this.regions.reset();
+      // Or to get the pruned files, now that there are diffs.
       const cached = this.prCache.get(pr.key);
-      if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS) this.load(pr);
+      if (!cached || Date.now() - cached.at > PR_DATA_TTL_MS || (!cached.files && this.wantsFiles(pr))) this.load(pr);
       this.revealFromHash();
       this.render();
     }
@@ -349,17 +417,31 @@ class Controller implements UiActions {
     if (this.data?.key !== pr.key) {
       this.status = 'loading';
       this.data = null;
+      // A revisit's data often comes within this task (GitHub's response
+      // fetched meanwhile, the stored result with lookup's reply): then the
+      // page is rendered once, not first as loading. Unless diffs are to be
+      // hidden as last time, and aren't yet (a sheet goes in before paint).
+      if (this.pr?.isDiffView && !this.styles.applied && (this.preShown?.key === pr.key || this.early?.key === pr.key)) {
+        this.render();
+      } else {
+        window.setTimeout(() => {
+          if (token === this.loadToken && this.status === 'loading') this.render();
+        });
+      }
     }
-    this.render();
 
-    this.prData(pr)
+    this.prData(pr, this.wantsFiles(pr))
       .then((data) => {
         if (token !== this.loadToken) return;
         this.data = data;
+        this.early = null;
         this.status = 'ready';
         this.error = undefined;
+        // The popover was hovered meanwhile.
+        if (data.result.partial && this.wantsFiles(pr)) this.load(pr);
         this.revealFromHash();
         this.render();
+        this.remember();
       })
       .catch((err: unknown) => {
         if (token !== this.loadToken) return;
@@ -375,61 +457,118 @@ class Controller implements UiActions {
    * 700 KB JSON response; the page never parses it or keeps any of it, and
    * gets back only the pruned files. If the background script already has a
    * result for this exact list (from an earlier visit; GitHub's ETag says so),
-   * the response isn't even read, let alone passed along.
+   * the response isn't even read, let alone passed along: the result usually
+   * came with the reply to `lookup` already.
+   *
+   * With `files`, the result has the pruned files; else it is a summary.
    */
-  private prData(pr: PrRef): Promise<PrData> {
-    let entry = this.prCache.get(pr.key);
-    if (!entry || Date.now() - entry.at > PR_DATA_TTL_MS) {
-      const prefetched = this.prefetched?.key === pr.key ? this.prefetched.promise : null;
-      this.prefetched = null;
-      const promise = (prefetched ?? this.fetchPr(pr)).then(async (responses) => {
-        const res = responses.fileTree;
-        const etag = res.headers.get('ETag');
-        let result = etag && etag === responses.storedEtag ? await prune(pr, responses, null, etag) : null;
-        if (result) discard(res);
-        // Not stored (any more): send the list over.
-        else result = await prune(pr, responses, await res.text(), etag);
-        if (!result) throw new Error('Could not prune this pull request');
-        if (isCapped(result)) result = applyTotals(result, (await responses.totals) ?? (await fetchPrTotals(pr)));
-        return { key: pr.key, result, repoConfigPath: responses.repo.path };
-      });
-      entry = cache(this.prCache, pr.key, promise, PR_DATA_TTL_MS);
-      promise.catch(() => this.prCache.delete(pr.key));
-    }
-    return entry.promise;
+  private prData(pr: PrRef, files: boolean): Promise<PrData> {
+    const entry = this.prCache.get(pr.key);
+    const fresh = !!entry && Date.now() - entry.at <= PR_DATA_TTL_MS;
+    if (fresh && (entry.files || !files)) return entry.promise;
+    const prefetched =
+      this.prefetched?.key === pr.key && (this.prefetched.files || !files) ? this.prefetched.promise : null;
+    this.prefetched = null;
+    const promise = fresh
+      ? entry.promise.then((data) => this.withFiles(pr, data))
+      : this.fromResponses(pr, prefetched ?? this.fetchPr(pr, files));
+    cache(this.prCache, pr.key, { promise, at: fresh ? entry.at : Date.now(), files });
+    promise.catch(() => this.prCache.delete(pr.key));
+    return promise;
   }
 
-  /** Asks the background script for settings and what it has stored for `pr`; also wakes it up. */
-  private lookup(pr: PrRef): Promise<Lookup> {
-    return sendMessage<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey }).catch(
-      async (): Promise<Lookup> => ({
-        // Not reachable right now: fetch everything, and read settings here.
-        settings: this.configured ? this.settings : pageSettings(await loadSettings()),
-        inactive: [],
-        etag: null,
-        capped: false,
-        repo: null,
-      }),
+  private async fromResponses(pr: PrRef, pending: Promise<PrResponses>): Promise<PrData> {
+    const responses = await pending;
+    const { fileTree: res, stored } = responses;
+    const etag = res.headers.get('ETag');
+    // A result for the rules file as last seen (`repo` null) is checked against the one just fetched.
+    const ready = stored.repo && stored.result;
+    let result = etag && etag === stored.etag ? (ready ?? (await prune(pr, responses, null, etag, null))) : null;
+    if (result) {
+      discard(res);
+    } else {
+      // Not stored (any more): send the list over, with GitHub's totals if it may be capped.
+      const totals = mayBeCapped(res) ? fetchPrTotals(pr).catch(() => null) : null;
+      result = await prune(pr, responses, await res.text(), etag, await totals);
+    }
+    if (!result) throw new Error('Could not prune this pull request');
+    return { key: pr.key, result: shareStrings(result), etag, repoConfigPath: responses.repo.path };
+  }
+
+  /**
+   * `data` with the pruned files, now that the page wants them: the
+   * background script still has them stored, unless GitHub's list changed.
+   */
+  private async withFiles(pr: PrRef, data: PrData): Promise<PrData> {
+    if (!data.result.partial) return data;
+    const { etag, repo, result } = await this.lookup(pr, true);
+    if (result && repo && etag === data.etag) return { ...data, result: shareStrings(result) };
+    return this.fromResponses(pr, this.fetchPr(pr, true));
+  }
+
+  /** Diffs show the pruned files (or hide them), and so does the ✂ popover. */
+  private wantsFiles(pr: PrRef): boolean {
+    return pr.isDiffView || this.filesFor === pr.key;
+  }
+
+  /**
+   * Asks the background script for settings and what it has stored for `pr`;
+   * also wakes it up. The settings in the reply are taken as they are, except
+   * that it only tells whether PRune is off in `pr`'s repository.
+   */
+  private lookup(pr: PrRef, files: boolean): Promise<Lookup> {
+    const version = this.settingsVersion;
+    return send<Lookup>({ type: 'lookup', key: pr.key, repoKey: pr.repoKey, files }).then(
+      (reply) => {
+        if (reply.incognito) this.incognito = true;
+        if (version === this.settingsVersion) this.applySettings(pr, reply.settings);
+        return reply;
+      },
+      async (err: unknown): Promise<Lookup> => {
+        // Not reachable right now: fetch everything, with the settings at hand.
+        // Chromium: this script can't read them itself (world.d.ts), and its
+        // build leaves out the code that would.
+        if (PRUNE_MAIN_WORLD && !this.configured) throw err;
+        if (!PRUNE_MAIN_WORLD && !this.configured) {
+          const settings = await loadSettings();
+          const disabledRepos = isRepoDisabled(settings, pr.repoKey) ? [pr.repoKey] : [];
+          this.applySettings(pr, { ...pageSettings(settings), disabledRepos });
+        }
+        return { settings: this.settings, inactive: [], etag: null, repo: null, result: null, incognito: this.incognito };
+      },
     );
   }
 
+  private applySettings(pr: PrRef, settings: PageSettings): void {
+    const prev = this.settings;
+    const disabled = settings.disabledRepos.includes(pr.repoKey);
+    const changed =
+      prev.enabled !== settings.enabled ||
+      prev.diffMode !== settings.diffMode ||
+      prev.treeMode !== settings.treeMode ||
+      isRepoDisabled(prev, pr.repoKey) !== disabled;
+    if (!changed) return;
+    const disabledRepos = prev.disabledRepos.filter((repo) => repo !== pr.repoKey);
+    if (disabled) disabledRepos.push(pr.repoKey);
+    this.settings = { ...settings, disabledRepos };
+    // Shown right away, before the PR is pruned again.
+    if (this.configured && this.pr?.key === pr.key) this.render();
+  }
+
   /** GitHub's responses for `pr`, minus what the background script already has. Doesn't need settings. */
-  private fetchPr(pr: PrRef, lookup = this.lookup(pr)): Promise<PrResponses> {
-    const fileTree = fetchFileTree(pr);
-    const totals = Promise.all([fileTree, lookup])
-      .then(([res, { capped }]) => (capped || mayBeCapped(res) ? fetchPrTotals(pr) : null))
-      .catch(() => null);
+  private fetchPr(pr: PrRef, files: boolean, lookup = this.lookup(pr, files)): Promise<PrResponses> {
+    lookup.then(({ result }) => result && files && this.preview(pr.key, result)).catch(() => {});
     return Promise.all([
-      fileTree,
-      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+      fetchFileTree(pr),
       lookup,
-    ]).then(([fileTree, repo, stored]) => ({
-      fileTree,
-      storedEtag: stored.etag,
-      totals,
-      repo,
-      repoFetched: !stored.repo,
-    }));
+      lookup.then(({ repo }) => repo ?? fetchRepoConfig(pr, 'HEAD').catch(() => ({ path: null, text: null }))),
+    ]).then(([fileTree, stored, repo]) => ({ fileTree, stored, repo, repoFetched: !stored.repo, files }));
+  }
+
+  /** Applies a result from an earlier visit to `key` while its own is loading. */
+  private preview(key: string, result: PruneResult): void {
+    this.early = { key, result };
+    if (this.configured && this.pr?.key === key && this.status === 'loading') this.render();
   }
 
   // ---- Rendering --------------------------------------------------------
@@ -447,7 +586,7 @@ class Controller implements UiActions {
   }
 
   private isPruning(): boolean {
-    return this.isActive() && this.status === 'ready' && (this.result?.pruned.length ?? 0) > 0;
+    return this.isActive() && this.status === 'ready' && (this.result?.removed.files ?? 0) > 0;
   }
 
   private revealedSet(): Set<string> {
@@ -486,12 +625,23 @@ class Controller implements UiActions {
   private paint(): void {
     if (!this.pr || !this.isEnabledHere()) {
       this.teardown();
+      // Off in this repository, as it turned out (Chromium: see `lookup()`).
+      this.dropSnapshot();
       return;
     }
     const pruning = this.isPruning();
+    const snapshot = this.preShown?.key === this.pr.key ? this.preShown.value : null;
+    // What hides the diffs until the data is here: the pre-render, else the
+    // background script's stored result (e.g. when page storage was cleared).
+    const early = this.early?.key === this.pr.key ? this.early.result : null;
+    const preview = snapshot?.result.pruned.length ? snapshot.result : early;
     if (pruning && this.result) {
-      // Only diff views have file diffs and a file tree to hide.
-      this.styles.update(this.pr.isDiffView ? this.result : null, {
+      // The PR changed since it was stored: its counters show other numbers now.
+      if (snapshot && !sameTotals(snapshot, this.result)) this.countMarks.stop();
+      // Only diff views have file diffs and a file tree to hide. A summary
+      // has no files: until they're here (just navigated to the diffs), as last time.
+      const sheet = this.result.partial ? preview : this.result;
+      this.styles.update(this.pr.isDiffView ? sheet : null, {
         diffMode: this.settings.diffMode,
         treeMode: this.settings.treeMode,
         revealed: this.revealedSet(),
@@ -502,7 +652,16 @@ class Controller implements UiActions {
       } else {
         this.collapser?.restore();
       }
+    } else if ((snapshot || preview) && this.status === 'loading' && this.isActive()) {
+      // Not the data yet: shown as last time, also on another tab of the PR.
+      if (preview) this.revealFromHash(preview);
+      this.styles.update(this.pr.isDiffView ? preview : null, {
+        diffMode: snapshot?.diffMode ?? this.settings.diffMode,
+        treeMode: snapshot?.treeMode ?? this.settings.treeMode,
+        revealed: this.revealedSet(),
+      });
     } else {
+      this.dropSnapshot();
       // Switched off (or refreshing): the same rules may apply again in a moment.
       this.styles.off();
       this.counts.restore();
@@ -535,8 +694,10 @@ class Controller implements UiActions {
     const { original, kept } = this.result;
     const wait = this.waitFor();
     if (this.counts.apply(this.pr.basePath, original, kept, () => this.bulk(), false, wait > 0)) {
-      this.lastRescan = performance.now();
+      this.lastRescan = Date.now();
     }
+    // Patched counters show their pre-render's mark as text now.
+    this.countMarks.settle();
     this.searchAfterWait(!this.counts.isComplete(), wait);
   }
 
@@ -548,7 +709,8 @@ class Controller implements UiActions {
 
   private wantsSection(): boolean {
     // Single-commit views only show some files, so a whole-PR list would mislead.
-    return !!this.pr?.isFilesTab && this.settings.diffMode === 'hide' && this.isPruning();
+    // A summary has no files to list: they are on their way.
+    return !!this.pr?.isFilesTab && this.settings.diffMode === 'hide' && this.isPruning() && !this.result?.partial;
   }
 
   private mountUi(fromMutation = false): void {
@@ -567,6 +729,22 @@ class Controller implements UiActions {
     if (anchor || this.status !== 'loading') indicator.mount(anchor);
     else indicator.unmount();
     this.placeSection(this.watching, fromMutation);
+    // A summary: the diffs will want the pruned files, so they're asked for
+    // when the pointer reaches the "Files changed" tab (or it gets focus),
+    // before the diffs render.
+    if (this.result?.partial) {
+      for (const link of this.counts.filesLinks()) {
+        if (this.armed.has(link)) continue;
+        this.armed.add(link);
+        link.addEventListener('pointerenter', this, { once: true });
+        link.addEventListener('focus', this, { once: true });
+      }
+    }
+  }
+
+  /** A "Files changed" link was reached (see `mountUi()`). */
+  handleEvent(): void {
+    this.needFiles();
   }
 
   /**
@@ -591,9 +769,9 @@ class Controller implements UiActions {
 
   /** Rate-limits searches for page parts that may not have rendered yet (queues a retry instead). */
   private canLocate(fromMutation: boolean): boolean {
-    const since = performance.now() - this.lastLocate;
+    const since = Date.now() - this.lastLocate;
     if (since >= INCOMPLETE_RESCAN_MS) {
-      this.lastLocate = performance.now();
+      this.lastLocate = Date.now();
       return true;
     }
     if (fromMutation) this.scheduleRetry(INCOMPLETE_RESCAN_MS - since);
@@ -611,8 +789,8 @@ class Controller implements UiActions {
     return this.regions.diffList();
   }
 
-  private teardown(): void {
-    this.styles.clear();
+  private teardown(keepStyles = false): void {
+    if (!keepStyles) this.styles.clear();
     this.counts.restore();
     this.collapser?.restore();
     this.indicator?.unmount();
@@ -630,15 +808,112 @@ class Controller implements UiActions {
     this.section = null;
     this.sectionContainer = null;
     this.data = null;
+    this.early = null;
     this.prefetched = null;
     this.status = 'loading';
     this.error = undefined;
   }
 
+  // ---- Pre-rendering (see dom/prerender.ts) ------------------------------
+
+  /**
+   * Shows `pr` as it was pruned last time, from before its data is here.
+   * Until the settings are known, that is on the assumption that they are
+   * the same; once they are, a pre-render made for others is dropped.
+   */
+  private preRender(pr: PrRef | null, deferred = false): void {
+    if (pr && this.preShown?.key === pr.key) {
+      if (this.configured && !this.fits(pr, this.preShown.value)) {
+        this.dropSnapshot();
+        this.forgetPr(pr.key);
+      }
+      return;
+    }
+    this.dropSnapshot();
+    // The root element is there at document_start (Chromium, Firefox), but checked.
+    if (!pr || !document.documentElement) return;
+    const data = this.data?.key === pr.key && this.status === 'ready' ? this.data.result : null;
+    if (data && !(data.partial && pr.isDiffView)) {
+      // Its data is here already (it came with lookup's reply, or back from
+      // the back/forward cache): the counters show its numbers until patched,
+      // which only happens on the next check.
+      if (data.removed.files > 0 && this.fits(pr) && !this.counts.isComplete()) this.countMarks.start(data.original, data.kept);
+      return;
+    }
+    if (!pr.isDiffView && !deferred) {
+      // Without diffs, only counters are pre-rendered, and they are marked
+      // from requestAnimationFrame anyway: storage can wait for the next
+      // frame, by when the page itself has most likely opened it.
+      requestAnimationFrame(() => {
+        if (parsePrUrl(location.pathname)?.key === pr.key) this.preRender(pr, true);
+      });
+      return;
+    }
+    const store = pageStore();
+    const value = store && readSnapshot(store, pr.key);
+    if (!value) return;
+    if (this.configured && !this.fits(pr, value)) {
+      this.forgetPr(pr.key);
+      return;
+    }
+    this.preShown = { key: pr.key, value };
+    this.countMarks.start(value.result.original, value.result.kept);
+    // Rendering waits for the settings; once they are known it keeps this up. A
+    // link to a pruned file's diff shows it, which can't be done before then.
+    if (pr.isDiffView && !this.configured && !hashedFile(value.result)) {
+      this.styles.update(value.result, { diffMode: value.diffMode, treeMode: value.treeMode, revealed: new Set() });
+    }
+  }
+
+  /** Whether PRune prunes `pr`, showing it as in `snapshot` (if given). */
+  private fits(pr: PrRef, snapshot?: Snapshot): boolean {
+    return (
+      this.settings.enabled &&
+      !isRepoDisabled(this.settings, pr.repoKey) &&
+      !this.inactive.has(pr.key) &&
+      (!snapshot || (snapshot.diffMode === this.settings.diffMode && snapshot.treeMode === this.settings.treeMode))
+    );
+  }
+
+  /** Done with the pre-render: the stylesheet is the real data's now, the counters' marks go. */
+  private dropSnapshot(): void {
+    this.preShown = null;
+    if (this.countMarks.active) this.countMarks.stop();
+  }
+
+  /** Stores what this PR looks like pruned for its next visit, or forgets it if it isn't. */
+  private remember(): void {
+    const pr = this.pr;
+    const result = this.result;
+    const store = pageStore();
+    if (!store || this.incognito || !pr || !result || this.status !== 'ready') return;
+    const { diffMode, treeMode } = this.settings;
+    const keep = this.isPruning() && this.isEnabledHere();
+    // Off the way of the page's own work; a few hundred bytes for most PRs.
+    idle(() => {
+      if (!keep) {
+        this.forgetPr(pr.key);
+        return;
+      }
+      const stored = storedText(store, pr.key);
+      // A summary (no diffs here) only stands in for the files kept last
+      // time if its numbers have changed: the counters must show the new ones.
+      const prev = result.partial && stored ? decode(stored) : null;
+      const same = prev && sameTotals(prev, result) && prev.diffMode === diffMode && prev.treeMode === treeMode;
+      const raw = same ? stored! : encode(result, diffMode, treeMode);
+      saveSnapshot(store, pr.key, raw, raw === stored);
+    });
+  }
+
+  private forgetPr(key: string): void {
+    const store = pageStore();
+    if (store) clearSnapshots(store, (k) => k === key);
+  }
+
   /** Visiting `#diff-<digest>` of a pruned file (e.g. from a link) reveals it. */
-  private revealFromHash(): void {
-    const m = /^#diff-([0-9a-f]{64})/.exec(location.hash);
-    if (m && this.result?.pruned.some((f) => f.digest === m[1])) this.revealedSet().add(m[1]!);
+  private revealFromHash(result = this.result): void {
+    const digest = result && hashedFile(result);
+    if (digest) this.revealedSet().add(digest);
   }
 
   // ---- UiActions --------------------------------------------------------
@@ -647,8 +922,11 @@ class Controller implements UiActions {
     if (!this.pr) return;
     if (active) this.inactive.delete(this.pr.key);
     else this.inactive.add(this.pr.key);
-    sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
+    send({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
+    // Switched off, it isn't pre-rendered next time either (a reload may come right away).
+    if (active) this.remember();
+    else this.forgetPr(this.pr.key);
   }
 
   setRevealed(digest: string, revealed: boolean): void {
@@ -686,7 +964,14 @@ class Controller implements UiActions {
   }
 
   openSettings(): void {
-    sendMessage({ type: 'open-options' }).catch(() => {});
+    send({ type: 'open-options' }).catch(() => {});
+  }
+
+  needFiles(): void {
+    const pr = this.pr;
+    if (!pr || this.wantsFiles(pr)) return;
+    this.filesFor = pr.key;
+    if (this.result?.partial) this.load(pr);
   }
 
   private tabStatus(): TabStatus {
@@ -698,7 +983,7 @@ class Controller implements UiActions {
       status: !pr ? 'idle' : !enabled ? 'disabled' : this.status,
       error: this.error,
       active: this.isActive(),
-      pruned: this.result?.pruned.length ?? 0,
+      pruned: this.result?.removed.files ?? 0,
       original: this.result?.original,
       kept: this.result?.kept,
       sources: this.result?.sources ?? [],
@@ -708,16 +993,29 @@ class Controller implements UiActions {
 }
 
 /**
- * Caches `promise` under `key`. Entries older than `ttl` are never read again,
- * so they are dropped then instead of keeping a PR's file list for good.
+ * Caches `entry` under `key`. Entries older than PR_DATA_TTL_MS are never read
+ * again, so they are dropped then instead of keeping a PR's result for good.
  */
-function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise<T>, ttl: number): CacheEntry<T> {
-  const entry = { promise, at: Date.now() };
+function cache(map: Map<string, CacheEntry>, key: string, entry: CacheEntry): void {
   map.set(key, entry);
-  setTimeout(() => {
-    if (map.get(key) === entry) map.delete(key);
-  }, ttl + 1000);
-  return entry;
+  setTimeout(
+    () => {
+      if (map.get(key) === entry) map.delete(key);
+    },
+    entry.at + PR_DATA_TTL_MS + 1000 - Date.now(),
+  );
+}
+
+/** The pruned file whose diff the URL points to (`#diff-<digest>`), if any. */
+function hashedFile(result: PruneResult): string | null {
+  const digest = /^#diff-([0-9a-f]{64})/.exec(location.hash)?.[1];
+  return digest && result.pruned.some((f) => f.digest === digest) ? digest : null;
+}
+
+/** Runs `task` when the page is idle (soon, at the latest). */
+function idle(task: () => void): void {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(task, { timeout: 500 });
+  else setTimeout(task, 0);
 }
 
 /** Header diffstat container when the exact-match search found nothing (e.g. no pruned files). */
@@ -727,11 +1025,12 @@ function findDiffstatFallback(): Element | null {
 
 function prune(
   pr: PrRef,
-  { repo, repoFetched }: PrResponses,
+  { repo, repoFetched, files }: PrResponses,
   fileTree: string | null,
   etag: string | null,
+  totals: Partial<PrTotals> | null,
 ): Promise<PruneResult | null> {
-  return sendMessage<PruneResult | null>({
+  return send<PruneResult | null>({
     type: 'prune',
     key: pr.key,
     repoKey: pr.repoKey,
@@ -739,7 +1038,9 @@ function prune(
     etag,
     repo,
     repoFetched,
-  }).then((result) => result && shareStrings(result));
+    totals,
+    files,
+  });
 }
 
 /**
@@ -764,13 +1065,6 @@ function discard(res: Response): void {
   } catch {
     // Only frees the connection's buffers early; the response is dropped anyway.
   }
-}
-
-/** Messages the background script; it replies `{ error }` when something failed. */
-async function sendMessage<T = unknown>(msg: Message): Promise<T> {
-  const reply = (await ext.runtime.sendMessage(msg)) as T | { error: string } | undefined;
-  if (reply && typeof reply === 'object' && 'error' in reply) throw new Error(reply.error);
-  return reply as T;
 }
 
 function filesTabPath(pr: PrRef): string {

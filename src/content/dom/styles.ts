@@ -16,17 +16,36 @@ import type { PruneResult } from '../../shared/prune.ts';
  * Id selectors, not [id="…"], so the style engine can look rules up by id.
  *
  * The sheet is written once per PR and settings, never for a click: in
- * Chromium, any change to a document's stylesheets restyles the whole
- * document (~1 s on a 3,000-file diff), while an attribute change only
- * restyles the elements it affects. So a file shown again from the "Pruned
- * files" section gets a `data-prune-show` attribute (its rules end in
- * `:not([data-prune-show])`), and in Chromium every rule starts with
- * `html[data-prune-on]`, an attribute that switches them all off and on
- * (the per-PR switch, the conversation tab). Firefox restyles only elements
- * with the ids and classes in a changed sheet, but an ancestor selector like
- * `html[…]` would make it restyle everything, both when the sheet changes and
- * when the attribute does (past 150 selectors). There the rules start at the
- * id and the sheet is taken out instead.
+ * Chromium, any change to a GitHub page's stylesheets restyles nearly the
+ * whole document (~8k elements, ~1 s on a 3,000-file diff: GitHub links its
+ * `@layer primer-react` CSS 4–5 times, and then Chromium re-matches all of
+ * its rules), while an attribute change only restyles the elements it affects.
+ * So a file shown again from the "Pruned files" section gets a
+ * `data-prune-show` attribute (its rules end in `:not([data-prune-show])`),
+ * and in Chromium every rule starts with `html[data-prune-on]`, an attribute
+ * that switches them all off and on (the per-PR switch, the conversation
+ * tab). Firefox restyles only elements with the ids and classes in a changed
+ * sheet, but an ancestor selector like `html[…]` would make it restyle
+ * everything, both when the sheet changes and when the attribute does (past
+ * 150 selectors). There the rules start at the id and the sheet is taken out
+ * instead. And because of Chromium's restyle, the only cheap time to insert
+ * the sheet is before the page's first paint, when that restyle is part of the
+ * first one. So a PR seen before gets it at document_start from its pre-render
+ * (dom/prerender.ts), or else as soon as the background script answers, from
+ * its stored result (the answer often comes just before the first paint: page
+ * loading tasks go first). Inserted on another tab of the PR, after the first
+ * paint, it would cost a restyle that may never pay off, so it isn't.
+ *
+ * Pruned diffs shown again render lazily at first, with `content-visibility:
+ * auto`: switching PRune off on a big PR would otherwise style and lay out
+ * every pruned diff in one frame (tens of thousands of elements, ~250 ms),
+ * where now only those on screen are. The rest then render a few diffs per
+ * frame ("settle"): left lazy, their placeholder heights would throw off
+ * jumps to files further down (GitHub scrolls smoothly, past them). On the
+ * classic UI only the diff's body is lazy: the header's menus would be cut
+ * off at the diff's edge. In Chromium, groups of these rules switch off one by
+ * one as tokens leave <html>'s `data-prune-lazy`; Firefox has each group in a
+ * sheet of its own.
  */
 
 declare const PRUNE_ENGINE: 'blink' | 'gecko' | undefined;
@@ -35,8 +54,14 @@ declare const PRUNE_ENGINE: 'blink' | 'gecko' | undefined;
 export const GATED = (typeof PRUNE_ENGINE === 'string' ? PRUNE_ENGINE : 'blink') === 'blink';
 
 const STYLE_ID = 'prune-style';
+/** Firefox's sheets of `lazyCss()` rules, one per group. */
+const LAZY_ID = 'prune-lazy';
 /** On <html> while the rules apply (Chromium). */
 const ON_ATTR = 'data-prune-on';
+/** On <html>: the groups of pruned diffs that render lazily when shown (Chromium). */
+const LAZY_ATTR = 'data-prune-lazy';
+/** Pruned diffs that settle per frame (see the top of this file). */
+const SETTLE_GROUP = 8;
 /** On diffs and tree rows of files shown again. */
 const SHOW_ATTR = 'data-prune-show';
 /** Longest wait for GitHub to take a tab's diffs away before the rules stop applying anyway. */
@@ -56,6 +81,14 @@ export interface StyleOptions {
 
 export class PruneStyles {
   private el: HTMLStyleElement | null = null;
+  /** Groups of `lazyCss()` rules in the sheet. */
+  private groups = 0;
+  /** `data-prune-lazy` while none of them has settled. */
+  private tokens = '';
+  /** Firefox: a sheet per group, which stay while the others are taken out, until settled. */
+  private lazy: HTMLStyleElement[] = [];
+  /** Animation frame of the next settling step. */
+  private settling = 0;
   /**
    * What the stylesheet was built from. The CSS text itself is not kept: it can
    * be ~50 KB on a big PR, and the browser already holds it.
@@ -98,11 +131,19 @@ export class PruneStyles {
     // A sheet built for both UIs still does once the page turns out to be classic.
     const classic = isClassicUi() && (!same || built!.classic);
     if (!same || built!.diffMode !== diffMode || built!.treeMode !== treeMode || built!.classic !== classic) {
-      if (!this.el) {
-        this.el = document.createElement('style');
-        this.el.id = STYLE_ID;
+      const lazy = diffMode === 'hide' ? lazyCss(result, GATED, classic) : [];
+      this.groups = lazy.length;
+      this.tokens = lazyTokens(0, lazy.length);
+      this.el ??= styleElement(STYLE_ID);
+      this.el.textContent = [buildCss(result, { ...options, classic, gated: GATED }), ...(GATED ? lazy : [])].join('\n');
+      if (!GATED) {
+        for (const el of this.lazy) el.remove();
+        this.lazy = lazy.map((css, i) => {
+          const el = styleElement(`${LAZY_ID}-${i}`);
+          el.textContent = css;
+          return el;
+        });
       }
-      this.el.textContent = buildCss(result, { ...options, classic, gated: GATED });
     }
     this.built = { result, diffMode, treeMode, classic };
     this.reveal(result, options.revealed);
@@ -117,12 +158,16 @@ export class PruneStyles {
   ensure(): void {
     if (!this.on || !this.el) return;
     if (this.leaveTimer && !this.diffsShown()) {
-      this.off();
+      this.off(false);
       return;
     }
-    if (!this.el.isConnected) (document.head ?? document.documentElement).append(this.el);
+    if (this.settling) this.stopSettling();
+    const parent = document.head ?? document.documentElement;
+    if (!this.el.isConnected) parent.append(this.el);
+    for (const el of this.lazy) if (!el.isConnected) parent.append(el);
     const root = document.documentElement;
     if (GATED && !root.hasAttribute(ON_ATTR)) root.setAttribute(ON_ATTR, '');
+    if (GATED && root.getAttribute(LAZY_ATTR) !== this.tokens) root.setAttribute(LAZY_ATTR, this.tokens);
     this.waiting = false;
     for (let i = 0; i < this.shown.length; i++) {
       const el = document.getElementById(this.shown[i]!);
@@ -136,24 +181,39 @@ export class PruneStyles {
     }
   }
 
+  /** Whether rules apply (for some result). */
+  get applied(): boolean {
+    return this.on;
+  }
+
   /** The elements marked as shown, so their replacement by GitHub can be watched for. */
   shownElements(): readonly Element[] {
     return this.marked;
   }
 
-  /** Stops applying the rules, keeping them for when they apply again (same PR). */
-  off(): void {
+  /**
+   * Stops applying the rules, keeping them for when they apply again (same
+   * PR). Shown pruned diffs settle, unless they're gone (`settle` false).
+   */
+  off(settle = true): void {
     this.waiting = false;
     this.stopLeaving();
     if (!this.on) return;
     this.on = false;
     if (GATED) document.documentElement.removeAttribute(ON_ATTR);
     else this.el?.remove();
+    if (settle) this.settle();
   }
 
   /** Stops applying the rules and forgets them (another PR, or none). */
   clear(): void {
-    this.off();
+    this.off(false);
+    this.stopSettling();
+    if (GATED) document.documentElement.removeAttribute(LAZY_ATTR);
+    for (const el of this.lazy) el.remove();
+    this.lazy = [];
+    this.groups = 0;
+    this.tokens = '';
     this.built = null;
     this.unmark(new Set());
     this.shown = [];
@@ -168,10 +228,32 @@ export class PruneStyles {
   private leave(): void {
     if (!this.on || this.leaveTimer) return;
     if (!this.diffsShown()) {
-      this.off();
+      this.off(false);
       return;
     }
-    this.leaveTimer = window.setTimeout(() => this.off(), LEAVE_MS);
+    // Diffs GitHub has taken away by then needn't settle.
+    this.leaveTimer = window.setTimeout(() => this.off(this.diffsShown()), LEAVE_MS);
+  }
+
+  /** Has the shown pruned diffs render fully, a group per frame, from the frame after next. */
+  private settle(): void {
+    this.stopSettling();
+    let done = -1;
+    const step = () => {
+      this.settling = 0;
+      // The first frame is the one that shows the diffs.
+      if (++done > 0) {
+        if (GATED) document.documentElement.setAttribute(LAZY_ATTR, lazyTokens(done, this.groups));
+        else this.lazy[done - 1]?.remove();
+      }
+      if (done < this.groups) this.settling = requestAnimationFrame(step);
+    };
+    if (this.groups > 0) this.settling = requestAnimationFrame(step);
+  }
+
+  private stopSettling(): void {
+    cancelAnimationFrame(this.settling);
+    this.settling = 0;
   }
 
   private stopLeaving(): void {
@@ -207,6 +289,12 @@ export class PruneStyles {
   }
 }
 
+function styleElement(id: string): HTMLStyleElement {
+  const el = document.createElement('style');
+  el.id = id;
+  return el;
+}
+
 /** Whether two results prune the same files, so their sheets would be the same. */
 function sameFiles(a: PruneResult, b: PruneResult): boolean {
   return (
@@ -223,7 +311,8 @@ function sameFiles(a: PruneResult, b: PruneResult): boolean {
  * the new UI) gets the selectors for both.
  */
 function isClassicUi(): boolean {
-  return !!document.getElementById('files')?.classList.contains('js-diff-container');
+  // Its class attribute rather than classList: no DOMTokenList in this script's world (see ui/indicator.ts).
+  return / js-diff-container /.test(` ${document.getElementById('files')?.className ?? ''} `);
 }
 
 /** Ids that need more than a backslash before some characters. */
@@ -277,4 +366,28 @@ export function buildCss(
     }
   }
   return rules.join('\n');
+}
+
+/** `data-prune-lazy` for groups `from` to `to` (exclusive). */
+function lazyTokens(from: number, to: number): string {
+  let tokens = '';
+  for (let i = from; i < to; i++) tokens += i > from ? ` ${i}` : `${i}`;
+  return tokens;
+}
+
+/** Rules that render shown pruned diffs lazily, a group per settling step (see the top of this file). */
+export function lazyCss(result: PruneResult, gated = false, classic = false): string[] {
+  const groups: string[] = [];
+  for (let i = 0; i < result.pruned.length; i += SETTLE_GROUP) {
+    const gate = gated ? `html[${LAZY_ATTR}~="${groups.length}"] ` : '';
+    const selectors: string[] = [];
+    for (const { digest } of result.pruned.slice(i, i + SETTLE_GROUP)) {
+      // Classic UI: the body; new UI: the whole diff (its menus are layers of their own).
+      selectors.push(`${gate}#diff-${digest} > .js-file-content`);
+      if (!classic) selectors.push(`${gate}#diff-${digest}:not(.js-file)`);
+    }
+    // Placeholder height of a diff not rendered yet (about the median).
+    groups.push(`${selectors.join(',\n')} { content-visibility: auto; contain-intrinsic-size: auto 240px; }`);
+  }
+  return groups;
 }

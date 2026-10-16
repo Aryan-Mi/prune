@@ -1,7 +1,6 @@
 import { ext } from '../shared/browser.ts';
 import type { RepoConfig } from '../shared/messages.ts';
 import type { PruneResult } from '../shared/prune.ts';
-import { isCapped } from '../shared/totals.ts';
 
 /**
  * Results the background script has computed before, kept in storage.session
@@ -15,11 +14,14 @@ import { isCapped } from '../shared/totals.ts';
  * revisited PR's 700 KB response is never read in the page, passed along or
  * parsed (and the browser's HTTP cache has usually saved downloading it
  * again). A stored result is only ever used after GitHub answered a request
- * for it with the tab's cookies, so access is still checked.
+ * for it with the tab's cookies, so access is still checked; before that it
+ * only hides diffs in the page GitHub served for the PR (see Lookup.result).
  *
  * Only results are kept, not file lists: they hold just the pruned files, so
  * they're a fraction of the size. When the rules change, the list is sent or
- * fetched once more instead.
+ * fetched once more instead. A capped list's result includes GitHub's totals
+ * for the whole PR (see background/pr.ts), so a stored result is all a page
+ * needs.
  */
 
 /** Results kept at most; the oldest are dropped first. */
@@ -36,8 +38,6 @@ export interface Stored {
   etag: string;
   /** Fingerprint of the rules (see rulesFingerprint()). */
   rules: string;
-  /** The list was capped, so GitHub's totals are needed too. */
-  capped: boolean;
 }
 
 interface IndexEntry extends Stored {
@@ -70,7 +70,7 @@ const resultKey = (key: string) => `result:${key}`;
 /** What's stored for `key`, if anything. */
 export async function stored(key: string): Promise<Stored | null> {
   const entry = (await readIndex())[key];
-  return entry ? { etag: entry.etag, rules: entry.rules, capped: entry.capped } : null;
+  return entry ? { etag: entry.etag, rules: entry.rules } : null;
 }
 
 /** The stored result for `key`, if it was computed from the list GitHub sent with `etag`, with `rules`. */
@@ -91,7 +91,7 @@ export async function loadResult(key: string, etag: string, rules: string): Prom
 export function saveResult(key: string, etag: string, rules: string, result: PruneResult): Promise<void> {
   return serially(async () => {
     const idx = await readIndex();
-    idx[key] = { etag, rules, capped: isCapped(result), bytes: resultBytes(result), usedAt: Date.now() };
+    idx[key] = { etag, rules, bytes: resultBytes(result), usedAt: Date.now() };
     const evicted: string[] = [];
     const byAge = Object.keys(idx).sort((a, b) => idx[a]!.usedAt - idx[b]!.usedAt);
     let total = byAge.reduce((sum, k) => sum + idx[k]!.bytes, 0);
@@ -137,6 +137,8 @@ export async function rulesFingerprint(rulesKey: string, repo: RepoConfig, remot
 /** How long a repository's .pruneignore is reused before it's fetched again. */
 export const REPO_CONFIG_TTL_MS = 10 * 60_000;
 const REPO_CONFIGS_KEY = 'repoConfigs';
+/** Rules files kept at most, the most recently fetched; real ones are a few KB. */
+const MAX_REPO_CONFIGS = 32;
 
 type RepoConfigs = Record<string, RepoConfig & { fetchedAt: number }>;
 
@@ -145,18 +147,23 @@ async function readRepoConfigs(): Promise<RepoConfigs> {
   return (stored[REPO_CONFIGS_KEY] as RepoConfigs | undefined) ?? {};
 }
 
-/** A recently fetched .pruneignore for the repository `key`, so tabs don't each fetch it. */
-export async function storedRepoConfig(key: string): Promise<RepoConfig | null> {
+/**
+ * The .pruneignore last fetched for the repository `key`. A `fresh` one is
+ * reused, so tabs don't each fetch it.
+ */
+export async function storedRepoConfig(key: string): Promise<(RepoConfig & { fresh: boolean }) | null> {
   const entry = (await readRepoConfigs())[key];
-  return entry && Date.now() - entry.fetchedAt < REPO_CONFIG_TTL_MS ? { path: entry.path, text: entry.text } : null;
+  return entry ? { path: entry.path, text: entry.text, fresh: Date.now() - entry.fetchedAt < REPO_CONFIG_TTL_MS } : null;
 }
 
 export function saveRepoConfig(key: string, config: RepoConfig): Promise<void> {
   return serially(async () => {
     const configs = await readRepoConfigs();
     const now = Date.now();
-    for (const k of Object.keys(configs)) if (now - configs[k]!.fetchedAt >= REPO_CONFIG_TTL_MS) delete configs[k];
     configs[key] = { path: config.path, text: config.text, fetchedAt: now };
+    // Kept past their reuse, to tell whether stored results are for them (see background/pr.ts lookup()).
+    const byAge = Object.keys(configs).sort((a, b) => configs[b]!.fetchedAt - configs[a]!.fetchedAt);
+    for (const k of byAge.slice(MAX_REPO_CONFIGS)) delete configs[k];
     await ext.storage.session.set({ [REPO_CONFIGS_KEY]: configs }).catch(() => {});
   });
 }

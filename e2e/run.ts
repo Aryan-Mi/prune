@@ -287,9 +287,16 @@ try {
   check('"Hide diff" hides it again', !(await lockDiff.isVisible()));
   // The per-PR switch on this tab.
   await pill.hover();
+  const lazyBody = () =>
+    page.evaluate((id) => {
+      const diff = document.getElementById(id)!;
+      return getComputedStyle(diff.querySelector('.js-file-content') ?? diff).contentVisibility;
+    }, `diff-${lock.pathDigest}`);
+  check('pruned diffs are set to render lazily when shown', (await lazyBody()) === 'auto');
   await page.locator('[data-prune-ui="indicator"] >> .switch').click();
   await page.waitForTimeout(300);
   check('switching off on the files tab shows the diff', await lockDiff.isVisible());
+  check('…and has it render fully right after', (await lazyBody()) === 'visible');
   await page.locator('[data-prune-ui="indicator"] >> .switch').click();
   await page.waitForTimeout(300);
   check('switching on hides it again', !(await lockDiff.isVisible()));
@@ -362,6 +369,57 @@ try {
     `got +${refetched.additions}`,
   );
 
+  // ---- Revisits are pre-rendered: pruned from the first frame -----------------------
+  // In a tab of its own, which follows what each frame shows (right before it is drawn).
+  const framesOf = async (url: string) => {
+    const tab = await context.newPage();
+    await tab.addInitScript((digest) => {
+      const rec = { shown: [] as string[], diffFrames: 0 };
+      (window as unknown as { __frames: typeof rec }).__frames = rec;
+      const text = (el: Element) => (el.getAttribute('data-prune-kept') ?? el.textContent ?? '').replace(/\D/g, '');
+      const box = document.createElement('div');
+      box.style.cssText = 'position:fixed;top:0;width:1px;height:1px;visibility:hidden';
+      const resize = () => {
+        if (!box.isConnected) document.documentElement.append(box);
+        box.style.width = box.style.width === '1px' ? '2px' : '1px';
+        requestAnimationFrame(resize);
+      };
+      requestAnimationFrame(resize);
+      new ResizeObserver(() => {
+        const del = document.querySelector('#diffstat > .color-fg-danger, [data-component="PH_Navigation"] .fgColor-danger');
+        const add = del?.previousElementSibling;
+        if (add && del) rec.shown.push(`${text(add)} ${text(del)}`);
+        const diff = document.getElementById(`diff-${digest}`);
+        if (diff && getComputedStyle(diff).display !== 'none') rec.diffFrames++;
+      }).observe(box);
+    }, lock.pathDigest);
+    await tab.goto(url, { waitUntil: 'load' });
+    await tab.waitForFunction(
+      () => document.querySelector('[data-prune-ui="indicator"]')?.shadowRoot?.querySelector('.pill.active'),
+      undefined,
+      { timeout: 20_000 },
+    );
+    await tab.waitForTimeout(500);
+    const frames = await tab.evaluate(() => (window as unknown as { __frames: { shown: string[]; diffFrames: number } }).__frames);
+    await tab.close();
+    return frames;
+  };
+  const pruned = `${expected.additions} ${expected.deletions}`;
+  const convFrames = await framesOf(PR);
+  check(
+    'revisit: the header shows the pruned numbers from its first frame',
+    convFrames.shown.length > 0 && convFrames.shown.every((s) => s === pruned),
+    `${convFrames.shown.filter((s) => s !== pruned).length} of ${convFrames.shown.length} frames showed others (${[...new Set(convFrames.shown)].join(', ')})`,
+  );
+  const filesFrames = await framesOf(`${PR}/files`);
+  check(
+    'revisit: the files tab too, and never shows the pruned diff',
+    filesFrames.shown.length > 0 && filesFrames.shown.every((s) => s === pruned) && filesFrames.diffFrames === 0,
+    `numbers ${[...new Set(filesFrames.shown)].join(', ')}; pruned diff shown in ${filesFrames.diffFrames} frame(s)`,
+  );
+  const storedKeys = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('prune:')).sort());
+  check('the pre-render is stored under the PR', storedKeys.join() === 'prune:index,prune:vitejs/vite#23648', storedKeys.join(', '));
+
   // ---- Per-tab toggle and settings changes (kept and pushed by the background script) ----
   const readUntil = async (want: number | null) => {
     let h = await readHeader(page);
@@ -379,6 +437,8 @@ try {
   await pill.waitFor({ timeout: 20_000 });
   const stillOff = await readUntil(total.additions);
   check('switched off stays off on reload', stillOff.additions === total.additions, `got +${stillOff.additions}`);
+  const offStored = await page.evaluate(() => localStorage.getItem('prune:vitejs/vite#23648'));
+  check('…and is not pre-rendered', offStored === null, offStored ?? '');
   await pill.hover();
   await page.locator('[data-prune-ui="indicator"] >> .switch').click();
   await page.mouse.move(10, 900);
