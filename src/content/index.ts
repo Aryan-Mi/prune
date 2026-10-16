@@ -526,9 +526,10 @@ class Controller implements UiActions, EventListenerObject {
       },
       async (err: unknown): Promise<Lookup> => {
         // Not reachable right now: fetch everything, with the settings at hand.
-        if (!this.configured) {
-          // Chromium: this script can't read them itself (world.d.ts).
-          if (PRUNE_MAIN_WORLD) throw err;
+        // Chromium: this script can't read them itself (world.d.ts), and its
+        // build leaves out the code that would.
+        if (PRUNE_MAIN_WORLD && !this.configured) throw err;
+        if (!PRUNE_MAIN_WORLD && !this.configured) {
           const settings = await loadSettings();
           const disabledRepos = isRepoDisabled(settings, pr.repoKey) ? [pr.repoKey] : [];
           this.applySettings(pr, { ...pageSettings(settings), disabledRepos });
