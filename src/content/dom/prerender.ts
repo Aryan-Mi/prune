@@ -210,10 +210,13 @@ export function saveSnapshot(storage: Storage, key: string, raw: string, unchang
 /** Forgets the pre-renders of the PRs `drop` picks (a PR key), or all of them. */
 export function clearSnapshots(storage: Storage, drop: (key: string) => boolean = () => true): void {
   try {
-    const index = readIndex(storage).filter(([k]) => !drop(k));
+    const all = readIndex(storage);
+    const index = all.filter(([k]) => !drop(k));
     for (const k of ownKeys(storage)) {
       if (k !== INDEX_KEY && drop(k.slice(PREFIX.length))) storage.removeItem(k);
     }
+    // Most PRs prune nothing and have nothing stored: no write then.
+    if (index.length === all.length && index.length > 0) return;
     if (index.length > 0) storage.setItem(INDEX_KEY, JSON.stringify(index));
     else storage.removeItem(INDEX_KEY);
   } catch {
@@ -277,6 +280,10 @@ const MARK_CSS = /* css */ `
 const DELETIONS = '.fgColor-danger, .color-fg-danger';
 const ADDITION_CLASS = /\b(?:fgColor-success|color-fg-success)\b/;
 const SCREEN_READER_CLASS = /\b(?:sr-only|VisuallyHidden)/;
+/** Numbers as GitHub renders them in any locale (see shared/format.ts). */
+const NUMBERS = /\d(?:[\d.,   ]*\d)?/g;
+/** A count GitHub caps, like "5,000+" on huge PRs. */
+const CAPPED = /\d\s*\+\)?$/;
 const COUNTERS = '#files_tab_counter, #prs-files-anchor-tab [data-component="CounterLabel"]';
 
 /**
@@ -382,13 +389,15 @@ export class CountMarks {
     // Only a counter's own text (no elements inside) can be swapped for a mark.
     if (el.childElementCount > 0) return false;
     const text = (el.textContent ?? '').trim();
-    const numbers = text.match(/\d(?:[\d.,   ]*\d)?/g)?.map((n) => parseCount(n)) ?? [];
+    // Not the number, and left as is by the real data's patches too.
+    if (CAPPED.test(text)) return false;
+    const numbers = text.match(NUMBERS)?.map((n) => parseCount(n)) ?? [];
     if (numbers.length < from.length) return false;
     if (to.every((n, i) => numbers[i] === n)) return true;
     if (!from.every((n, i) => numbers[i] === n)) return null;
     if (from.every((n, i) => n === to[i])) return true;
     let i = 0;
-    const mark = text.replace(/\d(?:[\d.,   ]*\d)?/g, (m) => (i < to.length ? replaceCount(m, to[i++]!) : m));
+    const mark = text.replace(NUMBERS, (m) => (i < to.length ? replaceCount(m, to[i++]!) : m));
     el.setAttribute(KEPT_ATTR, mark);
     this.markedEls.push(el);
     return true;

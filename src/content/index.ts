@@ -734,13 +734,14 @@ class Controller implements UiActions {
     const pr = this.pr;
     const result = this.result;
     if (!storage || !pr || !result || this.status !== 'ready') return;
-    if (!this.isPruning() || !this.isEnabledHere()) {
-      this.forgetPr(pr.key);
-      return;
-    }
     const { diffMode, treeMode } = this.settings;
+    const keep = this.isPruning() && this.isEnabledHere();
     // Off the way of the page's own work; a few hundred bytes for most PRs.
     idle(() => {
+      if (!keep) {
+        this.forgetPr(pr.key);
+        return;
+      }
       const raw = encode(result, diffMode, treeMode);
       saveSnapshot(storage, pr.key, raw, this.storedRaw?.key === pr.key && this.storedRaw.raw === raw);
       this.storedRaw = { key: pr.key, raw };
@@ -766,8 +767,9 @@ class Controller implements UiActions {
     else this.inactive.add(this.pr.key);
     sendMessage({ type: 'set-inactive', keys: [...this.inactive] }).catch(() => {});
     this.render();
-    // Switched off, it isn't pre-rendered next time either.
-    this.remember();
+    // Switched off, it isn't pre-rendered next time either (a reload may come right away).
+    if (active) this.remember();
+    else this.forgetPr(this.pr.key);
   }
 
   setRevealed(digest: string, revealed: boolean): void {
@@ -841,7 +843,7 @@ function cache<T>(map: Map<string, CacheEntry<T>>, key: string, promise: Promise
 
 /** Runs `task` when the page is idle (soon, at the latest). */
 function idle(task: () => void): void {
-  if (typeof requestIdleCallback === 'function') requestIdleCallback(task, { timeout: 2000 });
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(task, { timeout: 500 });
   else setTimeout(task, 0);
 }
 
