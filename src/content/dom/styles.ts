@@ -28,9 +28,9 @@ import type { PruneResult } from '../../shared/prune.ts';
  * sheet, but an ancestor selector like `html[…]` would make it restyle
  * everything, both when the sheet changes and when the attribute does (past
  * 150 selectors). There the rules start at the id and the sheet is taken out
- * instead. For the same reason a PR seen before gets the sheet as soon as the
- * background script answers, from its stored result: before the page's first
- * paint, the restyle is part of the first one. (The answer often comes just
+ * instead. And because of Chromium's restyle, a PR seen before gets the sheet
+ * as soon as the background script answers, from its stored result: before
+ * the page's first paint, that restyle is part of the first one. (The answer often comes just
  * then: page loading tasks go first. Inserted on another tab of the PR, after
  * the first paint, it would cost a restyle that may never pay off, so it isn't.)
  *
