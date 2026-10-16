@@ -287,9 +287,16 @@ try {
   check('"Hide diff" hides it again', !(await lockDiff.isVisible()));
   // The per-PR switch on this tab.
   await pill.hover();
+  const lazyBody = () =>
+    page.evaluate((id) => {
+      const diff = document.getElementById(id)!;
+      return getComputedStyle(diff.querySelector('.js-file-content') ?? diff).contentVisibility;
+    }, `diff-${lock.pathDigest}`);
+  check('pruned diffs are set to render lazily when shown', (await lazyBody()) === 'auto');
   await page.locator('[data-prune-ui="indicator"] >> .switch').click();
   await page.waitForTimeout(300);
   check('switching off on the files tab shows the diff', await lockDiff.isVisible());
+  check('…and has it render fully right after', (await lazyBody()) === 'visible');
   await page.locator('[data-prune-ui="indicator"] >> .switch').click();
   await page.waitForTimeout(300);
   check('switching on hides it again', !(await lockDiff.isVisible()));
