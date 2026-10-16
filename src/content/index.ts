@@ -182,6 +182,8 @@ class Controller implements UiActions, EventListenerObject {
       if (document.visibilityState === 'visible') this.scheduleCheck();
     });
     window.addEventListener('load', () => this.scheduleCheck());
+    // At document_start: the only time its sheet is free (see CountMarks).
+    if (document.readyState === 'loading') this.countMarks.prepare();
     this.check();
   }
 

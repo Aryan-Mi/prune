@@ -22,7 +22,9 @@ import type { DiffMode, TreeMode } from '../../shared/settings.ts';
  * GitHub's header, and text that doesn't match what the server rendered would
  * make it render the header again. Instead, each counter showing the stored
  * totals gets a `data-prune-kept` attribute holding its pruned text, which a
- * static stylesheet shows in place of its own (`CountMarks`). Counters are
+ * static stylesheet shows in place of its own (`CountMarks`; the sheet goes
+ * in at document_start, when it's free, so a PR opened by soft navigation
+ * only gets its diffs pre-rendered). Counters are
  * looked for from requestAnimationFrame callbacks, which run before every
  * frame is drawn, so the original numbers never show. A counter showing
  * other numbers means the PR changed since: then no counter is marked, and
@@ -308,18 +310,29 @@ export class CountMarks {
   /** The React header's navigation, which holds its diffstat. */
   private headerNav: Element | null = null;
 
+  /**
+   * Puts in the static sheet while the page has nothing to restyle: at
+   * document_start (before <head> exists). Counters are only marked while it
+   * is there. In Chromium a sheet put in after the page's first paint
+   * restyles the whole page (see dom/styles.ts), so on a PR opened by soft
+   * navigation (this script imported by the loader), or once a navigation
+   * has taken the sheet away, the counters show GitHub's numbers until the
+   * data is here.
+   */
+  prepare(): void {
+    if (this.markSheet) return;
+    this.markSheet = document.createElement('style');
+    this.markSheet.id = STYLE_ID;
+    this.markSheet.textContent = MARK_CSS;
+    document.documentElement.append(this.markSheet);
+  }
+
   /** Starts marking the counters that show `original`. */
   start(original: PrTotals, kept: PrTotals): void {
     this.stop();
+    if (!this.markSheet?.isConnected) return;
     this.shownTotals = original;
     this.prunedTotals = kept;
-    if (!this.markSheet) {
-      this.markSheet = document.createElement('style');
-      this.markSheet.id = STYLE_ID;
-      this.markSheet.textContent = MARK_CSS;
-    }
-    // Before <head> exists at document_start; a full-page navigation may take it away.
-    if (!this.markSheet.isConnected) document.documentElement.append(this.markSheet);
     this.onFrame();
   }
 
