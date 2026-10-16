@@ -40,8 +40,6 @@ export interface Snapshot {
    * stylesheet and to compare with the real result (see `sameTotals()`).
    */
   result: PruneResult;
-  /** `fingerprint()` of the stored text, to tell whether there is anything new to store. */
-  hash: number;
 }
 
 const PREFIX = 'prune:';
@@ -124,7 +122,6 @@ export function decode(raw: string): Snapshot | null {
   return {
     diffMode: diffMode as DiffMode,
     treeMode: treeMode as TreeMode,
-    hash: fingerprint(raw),
     result: {
       listed: 0,
       pruned: paths.map((path, i) => ({
@@ -149,6 +146,20 @@ export function decode(raw: string): Snapshot | null {
       firstPath: null,
     },
   };
+}
+
+/**
+ * `fingerprint()` of what is stored for `key` (a PR key), to tell whether
+ * there is anything new to store. Not taken when reading a pre-render: that
+ * is on the way of the page's first frame, this is for when it's idle.
+ */
+export function storedFingerprint(storage: Storage, key: string): number | null {
+  try {
+    const raw = storage.getItem(PREFIX + key);
+    return raw === null ? null : fingerprint(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** A hash of `text` (FNV-1a): what is stored can be compared without keeping it. */

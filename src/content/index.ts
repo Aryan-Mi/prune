@@ -16,6 +16,7 @@ import {
   readSnapshot,
   sameTotals,
   saveSnapshot,
+  storedFingerprint,
   type Snapshot,
 } from './dom/prerender.ts';
 import { BulkRegions } from './dom/regions.ts';
@@ -850,7 +851,8 @@ class Controller implements UiActions, EventListenerObject {
       return;
     }
     this.preShown = { key: pr.key, value };
-    this.storedHash = { key: pr.key, hash: value.hash };
+    // What is stored is hashed when it's next written (see `remember()`).
+    if (this.storedHash?.key === pr.key) this.storedHash = null;
     this.countMarks.start(value.result.original, value.result.kept);
     // Rendering waits for the settings; once they are known it keeps this up. A
     // link to a pruned file's diff shows it, which can't be done before then.
@@ -896,7 +898,8 @@ class Controller implements UiActions, EventListenerObject {
       const same = prev && sameTotals(prev, result) && prev.diffMode === diffMode && prev.treeMode === treeMode;
       const raw = encode(same ? prev.result : result, diffMode, treeMode);
       const hash = fingerprint(raw);
-      saveSnapshot(store, pr.key, raw, this.storedHash?.key === pr.key && this.storedHash.hash === hash);
+      const stored = this.storedHash?.key === pr.key ? this.storedHash.hash : storedFingerprint(store, pr.key);
+      saveSnapshot(store, pr.key, raw, stored === hash);
       this.storedHash = { key: pr.key, hash };
     });
   }
